@@ -29,7 +29,8 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project HarkRSS.xcodeproj -scheme HarkRSS -configuration Debug -sdk iphonesimulator \
-            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|BUILD" || true
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | tee sim.log | grep -E "error:|BUILD" || true
+          grep -q "BUILD SUCCEEDED" sim.log
           xcrun simctl install $UDID build/Build/Products/Debug-iphonesimulator/HarkRSS.app
       - name: Screenshots
         run: |

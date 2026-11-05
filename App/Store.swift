@@ -49,14 +49,16 @@ final class FeedStore: ObservableObject {
         notify = d.bool(forKey: "notify")
         let m = d.integer(forKey: "refreshMinutes")
         refreshMinutes = m == 0 ? 30 : m
+        var initial: [FeedItem]
         if let stored = ArticleStore.loadAll() {
-            items = stored
+            initial = stored
         } else {
             // First launch on 2.3: move the old JSON / UserDefaults cache into SwiftData.
-            items = Self.load("itemCache", [FeedItem].self) ?? []
-            if !items.isEmpty { ArticleStore.sync(items) }
+            initial = Self.load("itemCache", [FeedItem].self) ?? []
+            if !initial.isEmpty { ArticleStore.sync(initial) }
             try? FileManager.default.removeItem(at: Self.dataDir.appendingPathComponent("itemCache.json"))
         }
+        items = initial
         health = Self.load("health", [UUID: SourceHealth].self) ?? [:]
         retentionDays = d.object(forKey: "retentionDays") == nil ? 30 : d.integer(forKey: "retentionDays")
         if sources.isEmpty {
