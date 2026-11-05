@@ -29,20 +29,26 @@ struct HarkRSSApp: App {
 struct RootView: View {
     @EnvironmentObject var store: FeedStore
     @Environment(\.scenePhase) private var phase
+    @State private var tab = UserDefaults.standard.integer(forKey: "HarkTab")
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             NavigationStack { ItemsScreen(mode: .timeline) }
                 .tabItem { Label("时间线", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(0)
                 .badge(store.unreadTotal)
             NavigationStack { ItemsScreen(mode: .starred) }
                 .tabItem { Label("收藏", systemImage: "star") }
+                .tag(1)
             NavigationStack { ItemsScreen(mode: .later) }
                 .tabItem { Label("稍后读", systemImage: "clock") }
+                .tag(2)
             NavigationStack { SourcesView() }
                 .tabItem { Label("订阅", systemImage: "list.bullet.rectangle") }
+                .tag(3)
             NavigationStack { SettingsView() }
                 .tabItem { Label("设置", systemImage: "gearshape") }
+                .tag(4)
         }
         .modifier(TabMinimize())
         .task { await store.refresh() }

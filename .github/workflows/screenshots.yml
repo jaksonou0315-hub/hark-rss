@@ -1,0 +1,57 @@
+name: Simulator screenshots
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/screenshots.yml"]
+permissions:
+  contents: write
+jobs:
+  shots:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1); sudo xcode-select -s "$X"; xcodebuild -version
+      - run: brew install xcodegen && xcodegen generate
+      - name: Pick simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)['devices']
+          c=[(k,x) for k,v in d.items() if 'iOS-26' in k for x in v if x['name'].startswith('iPhone')]
+          c.sort(key=lambda t:(t[0], 'Pro' in t[1]['name'] and 'Max' not in t[1]['name']))
+          print(c[-1][1]['udid']); print(c[-1][0], c[-1][1]['name'], file=sys.stderr)")
+          echo "UDID=$UDID" >> $GITHUB_ENV
+          xcrun simctl boot $UDID
+          xcrun simctl bootstatus $UDID -b
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project HarkRSS.xcodeproj -scheme HarkRSS -configuration Debug -sdk iphonesimulator \
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "error:|BUILD" || true
+          xcrun simctl install $UDID build/Build/Products/Debug-iphonesimulator/HarkRSS.app
+      - name: Screenshots
+        run: |
+          BID=com.ouyanghong.harkrss
+          mkdir -p shots
+          xcrun simctl status_bar $UDID override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3 || true
+          shot(){ n=$1; w=$2; shift 2; xcrun simctl terminate $UDID $BID || true; sleep 1; xcrun simctl launch $UDID $BID -HarkDemo YES "$@"; sleep $w; xcrun simctl io $UDID screenshot shots/$n.png; }
+          xcrun simctl ui $UDID appearance light
+          shot 0-warmup 20 -HarkTab 0
+          shot 1-timeline 12 -HarkTab 0
+          shot 2-article 16 -HarkTab 0 -HarkOpenFirst YES
+          shot 3-starred 10 -HarkTab 1
+          shot 4-later 10 -HarkTab 2
+          shot 5-sources 10 -HarkTab 3
+          shot 6-settings 8 -HarkTab 4
+          xcrun simctl ui $UDID appearance dark
+          shot 7-timeline-dark 14 -HarkTab 0 -HarkPlay YES
+          shot 8-article-dark 16 -HarkTab 0 -HarkOpenFirst YES
+          rm shots/0-warmup.png; ls -la shots
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete screens --yes --cleanup-tag || true
+          gh release create screens shots/*.png --title "Screenshots" --notes "模拟器截图" --prerelease

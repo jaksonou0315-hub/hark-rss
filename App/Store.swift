@@ -49,6 +49,33 @@ final class FeedStore: ObservableObject {
             sources = [FeedSource(name: "Hark 推送", url: FeedSource.defaultFeed, group: "Hark")]
             persist(sources, "sources")
         }
+        if d.bool(forKey: "HarkDemo") {
+            let demo = [("少数派", "https://sspai.com/feed", "科技"),
+                        ("The Verge", "https://www.theverge.com/rss/index.xml", "科技"),
+                        ("Apple Newsroom", "https://www.apple.com/newsroom/rss-feed.rss", "科技"),
+                        ("阮一峰的网络日志", "https://www.ruanyifeng.com/blog/atom.xml", "博客"),
+                        ("Planet Money", "https://feeds.npr.org/510289/podcast.xml", "播客")]
+            for (n, u, g) in demo where !sources.contains(where: { $0.url == u }) {
+                sources.append(FeedSource(name: n, url: u, group: g))
+            }
+            if rules.isEmpty { rules = [FilterRule(keyword: "AI", kind: .highlight), FilterRule(keyword: "广告", kind: .mute)] }
+            persist(sources, "sources"); persist(rules, "rules")
+        }
+    }
+
+    private func applyDemoState() {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: "HarkDemo") else { return }
+        if starredIDs.isEmpty {
+            for (n, i) in items.prefix(15).enumerated() {
+                if n % 3 == 1 { saved[i.id] = i; starredIDs.insert(i.id) }
+                if n % 4 == 2 { saved[i.id] = i; laterIDs.insert(i.id) }
+                if n >= 5 && n % 2 == 0 { readIDs.insert(i.id) }
+            }
+        }
+        if d.bool(forKey: "HarkPlay"), Player.shared.current == nil, let m = items.first(where: { $0.hasMedia && $0.isAudio }) {
+            Player.shared.play(m)
+        }
     }
 
     // MARK: persistence
@@ -148,6 +175,7 @@ final class FeedStore: ObservableObject {
         lastRefresh = Date()
         loading = false
         updateBadge()
+        applyDemoState()
         if notifying && !old.isEmpty { postNotification(newOnes) }
         return newOnes.count
     }
