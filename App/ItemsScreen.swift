@@ -1,0 +1,195 @@
+import SwiftUI
+
+enum ListMode { case timeline, starred, later }
+
+struct ItemsScreen: View {
+    let mode: ListMode
+    @EnvironmentObject var store: FeedStore
+    @State private var search = ""
+    @State private var unreadOnly = false
+    @State private var scope: FeedStore.Scope = .all
+
+    private var title: String {
+        switch mode {
+        case .starred: return "收藏"
+        case .later: return "稍后读"
+        case .timeline:
+            switch scope {
+            case .all: return "Hark 推送"
+            case .group(let g): return g
+            case .source(let id): return store.sources.first { $0.id == id }?.name ?? "订阅源"
+            }
+        }
+    }
+
+    private var list: [FeedItem] {
+        var l: [FeedItem]
+        switch mode {
+        case .timeline: l = store.timeline(scope: scope)
+        case .starred: l = store.starredItems
+        case .later: l = store.laterItems
+        }
+        if unreadOnly { l = l.filter { !store.isRead($0) } }
+        let q = search.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty {
+            l = l.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.summary.localizedCaseInsensitiveContains(q) || $0.source.localizedCaseInsensitiveContains(q) }
+        }
+        return l
+    }
+
+    var body: some View {
+        let items = list
+        ZStack {
+            AuroraBackground()
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    if mode == .timeline, let e = store.lastError {
+                        Label(e, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous), tint: .red.opacity(0.2))
+                    }
+                    if items.isEmpty {
+                        EmptyHint(mode: mode, searching: !search.isEmpty).padding(.top, 80)
+                    }
+                    ForEach(items) { item in
+                        NavigationLink(value: item) { ItemCard(item: item) }
+                            .buttonStyle(.plain)
+                            .contextMenu { ItemActions(item: item) }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+            .refreshable { await store.refresh() }
+        }
+        .navigationTitle(title)
+        .searchable(text: $search, prompt: "搜索标题、内容、来源")
+        .navigationDestination(for: FeedItem.self) { ArticleView(item: $0) }
+        .toolbar { toolbarContent }
+        .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            if mode == .timeline {
+                Menu {
+                    Button { scope = .all } label: { Label("全部", systemImage: "tray.full") }
+                    Section("分组") {
+                        ForEach(store.groups, id: \.self) { g in
+                            Button { scope = .group(g) } label: { Label(g, systemImage: "folder") }
+                        }
+                    }
+                    Section("订阅源") {
+                        ForEach(store.sources) { s in
+                            Button { scope = .source(s.id) } label: { Label(s.name, systemImage: "dot.radiowaves.left.and.right") }
+                        }
+                    }
+                } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+            }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Toggle(isOn: $unreadOnly) { Label("只看未读", systemImage: "circle.inset.filled") }
+                Button { store.markAllRead(list) } label: { Label("全部标为已读", systemImage: "checkmark.circle") }
+                if mode == .timeline {
+                    Button { Task { await store.refresh() } } label: { Label("刷新", systemImage: "arrow.clockwise") }
+                }
+            } label: {
+                if store.loading { ProgressView() } else { Image(systemName: "ellipsis.circle") }
+            }
+        }
+    }
+}
+
+struct ItemCard: View {
+    let item: FeedItem
+    @EnvironmentObject var store: FeedStore
+
+    var body: some View {
+        let read = store.isRead(item)
+        let hi = store.isHighlighted(item)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    if !read { Circle().fill(Color.accentColor).frame(width: 8, height: 8) }
+                    Text(item.source).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                    if let d = item.date {
+                        Text("· " + d.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if item.hasMedia { Image(systemName: item.isVideo ? "play.rectangle.fill" : "waveform").font(.caption) }
+                    if store.isStarred(item) { Image(systemName: "star.fill").font(.caption).foregroundStyle(.yellow) }
+                    if store.isLater(item) { Image(systemName: "clock.fill").font(.caption).foregroundStyle(.orange) }
+                }
+                Text(item.title)
+                    .font(.headline)
+                    .foregroundStyle(read ? .secondary : .primary)
+                    .lineLimit(3)
+                let s = item.plainSummary
+                if !s.isEmpty && s != item.title {
+                    Text(s).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            if let u = URL(string: item.imageURL), !item.imageURL.isEmpty {
+                AsyncImage(url: u) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    Color.secondary.opacity(0.15)
+                }
+                .frame(width: 76, height: 76)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous), tint: hi ? Color.orange.opacity(0.3) : nil, interactive: true)
+    }
+}
+
+struct ItemActions: View {
+    let item: FeedItem
+    @EnvironmentObject var store: FeedStore
+    var body: some View {
+        Button { store.toggleRead(item) } label: {
+            Label(store.isRead(item) ? "标为未读" : "标为已读", systemImage: store.isRead(item) ? "circle" : "checkmark.circle")
+        }
+        Button { store.toggleStar(item) } label: {
+            Label(store.isStarred(item) ? "取消收藏" : "收藏", systemImage: store.isStarred(item) ? "star.slash" : "star")
+        }
+        Button { store.toggleLater(item) } label: {
+            Label(store.isLater(item) ? "移出稍后读" : "稍后读", systemImage: "clock")
+        }
+        if !item.link.isEmpty, let u = URL(string: item.link) {
+            ShareLink(item: u) { Label("分享", systemImage: "square.and.arrow.up") }
+        }
+    }
+}
+
+struct EmptyHint: View {
+    let mode: ListMode
+    let searching: Bool
+    private var icon: String {
+        if searching { return "magnifyingglass" }
+        switch mode { case .timeline: return "tray"; case .starred: return "star"; case .later: return "clock" }
+    }
+    private var text: String {
+        if searching { return "没有匹配的文章" }
+        switch mode {
+        case .timeline: return "还没有消息，下拉刷新试试"
+        case .starred: return "长按文章或在文章页点星标即可收藏"
+        case .later: return "长按文章选择「稍后读」"
+        }
+    }
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 40)).symbolRenderingMode(.hierarchical)
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
+        }
+        .padding(28)
+        .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+}

@@ -4,20 +4,45 @@ options:
   bundleIdPrefix: com.ouyanghong
   deploymentTarget:
     iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "2.0"
+    CURRENT_PROJECT_VERSION: "2"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
 targets:
   HarkRSS:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Resources]
+    dependencies:
+      - target: HarkWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkrss
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Support/App-Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: "Hark 推送"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGN_IDENTITY: ""
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+  HarkWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widget
+      - App/Models.swift
+      - App/Parser.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkrss.widget
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Support/Widget-Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: "Hark 推送"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
