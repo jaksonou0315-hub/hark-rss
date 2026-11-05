@@ -32,10 +32,11 @@ struct RootView: View {
     @ObservedObject private var bar = TabBarState.shared
     @ObservedObject private var player = Player.shared
     @State private var tab = UserDefaults.standard.integer(forKey: "HarkTab")
+    @State private var timelinePath: [FeedItem] = []
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            page(0) { ItemsScreen(mode: .timeline) }
+            page(0, path: $timelinePath) { ItemsScreen(mode: .timeline) }
             page(1) { ItemsScreen(mode: .starred) }
             page(2) { ItemsScreen(mode: .later) }
             page(3) { SourcesView() }
@@ -52,6 +53,13 @@ struct RootView: View {
         }
         .onChange(of: tab) { _ in bar.collapsed = false }
         .task { await store.refresh() }
+        .task {
+            // Demo hook for simulator screenshots: open the first article with a picture.
+            guard UserDefaults.standard.bool(forKey: "HarkOpenFirst") else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            let list = store.timeline(scope: .all)
+            if let i = list.first(where: { !$0.imageURL.isEmpty }) ?? list.first { timelinePath = [i] }
+        }
         .onChange(of: phase) { p in
             if p == .active { Task { await store.refresh() } }
             if p == .background { store.scheduleBackgroundRefresh() }
@@ -59,8 +67,10 @@ struct RootView: View {
     }
 
     /// Each tab keeps its own navigation stack alive; only the selected one is visible.
-    private func page<C: View>(_ i: Int, @ViewBuilder _ content: () -> C) -> some View {
-        NavigationStack { content() }
+    private func page<C: View>(_ i: Int, path: Binding<[FeedItem]>? = nil, @ViewBuilder _ content: () -> C) -> some View {
+        Group {
+            if let path { NavigationStack(path: path) { content() } } else { NavigationStack { content() } }
+        }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 Color.clear.frame(height: player.current == nil ? 70 : 136)
             }

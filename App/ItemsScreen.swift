@@ -8,7 +8,6 @@ struct ItemsScreen: View {
     @State private var search = ""
     @State private var unreadOnly = false
     @State private var scope: FeedStore.Scope = .all
-    @State private var demoItem: FeedItem?
 
     private var title: String {
         switch mode {
@@ -66,17 +65,9 @@ struct ItemsScreen: View {
             .refreshable { await store.refresh() }
         }
         .navigationTitle(title)
-        .searchable(text: $search, prompt: "搜索标题、内容、来源")
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索标题、内容、来源")
         .navigationDestination(for: FeedItem.self) { ArticleView(item: $0) }
         .toolbar { toolbarContent }
-        .navigationDestination(isPresented: Binding(get: { demoItem != nil }, set: { if !$0 { demoItem = nil } })) {
-            if let i = demoItem { ArticleView(item: i) }
-        }
-        .task {
-            guard mode == .timeline, UserDefaults.standard.bool(forKey: "HarkOpenFirst") else { return }
-            try? await Task.sleep(nanoseconds: 9_000_000_000)
-            demoItem = list.first(where: { !$0.imageURL.isEmpty && !$0.content.isEmpty }) ?? list.first
-        }
     }
 
     @ToolbarContentBuilder
