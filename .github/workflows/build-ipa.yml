@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     paths: ["App/**", "project.yml", ".github/workflows/build-ipa.yml"]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: macos-15
@@ -26,3 +28,9 @@ jobs:
         with:
           name: HarkRSS-unsigned-ipa
           path: HarkRSS-unsigned.ipa
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest HarkRSS-unsigned.ipa --title "HarkRSS 不签名 IPA" --notes "自动构建 ${{ github.sha }}" --latest
