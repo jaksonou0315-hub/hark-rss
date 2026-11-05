@@ -31,6 +31,7 @@ enum FeedParser {
             }
             it.categories = j["tags"] as? [String] ?? []
             if it.summary.isEmpty { it.summary = it.content }
+            it.title = it.title.strippingHTML
             if it.title.isEmpty { let s = it.summary.strippingHTML; it.title = s.isEmpty ? "(无标题)" : String(s.prefix(60)) }
             if it.imageURL.isEmpty { it.imageURL = (it.content.isEmpty ? it.summary : it.content).firstImageURL ?? "" }
             out.append(it)
@@ -123,6 +124,7 @@ final class XMLFeedParser: NSObject, XMLParserDelegate {
         case "category": if !t.isEmpty { c.categories.append(t) }
         case "item", "entry":
             if c.summary.isEmpty { c.summary = c.content }
+            c.title = c.title.strippingHTML
             if c.title.isEmpty { let s = c.summary.strippingHTML; c.title = s.isEmpty ? "(无标题)" : String(s.prefix(60)) }
             if c.imageURL.isEmpty { c.imageURL = (c.content.isEmpty ? c.summary : c.content).firstImageURL ?? "" }
             items.append(c)

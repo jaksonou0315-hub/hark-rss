@@ -69,7 +69,6 @@ struct ItemsScreen: View {
         .searchable(text: $search, prompt: "搜索标题、内容、来源")
         .navigationDestination(for: FeedItem.self) { ArticleView(item: $0) }
         .toolbar { toolbarContent }
-        .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
         .navigationDestination(isPresented: Binding(get: { demoItem != nil }, set: { if !$0 { demoItem = nil } })) {
             if let i = demoItem { ArticleView(item: i) }
         }

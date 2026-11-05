@@ -23,6 +23,14 @@ extension View {
     }
 }
 
+extension View {
+    /// Lets sibling glass shapes morph into each other on iOS 26.
+    @ViewBuilder
+    func glassID(_ id: String, _ ns: Namespace.ID) -> some View {
+        if #available(iOS 26.0, *) { self.glassEffectID(id, in: ns) } else { self }
+    }
+}
+
 struct GlassGroup<Content: View>: View {
     var spacing: CGFloat = 12
     @ViewBuilder var content: Content
@@ -73,7 +81,6 @@ struct MiniPlayerBar: View {
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .glass(in: Capsule(), interactive: true)
             }
-            .padding(.horizontal, 12).padding(.bottom, 6)
         }
     }
 }

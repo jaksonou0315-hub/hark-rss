@@ -29,42 +29,47 @@ struct HarkRSSApp: App {
 struct RootView: View {
     @EnvironmentObject var store: FeedStore
     @Environment(\.scenePhase) private var phase
+    @ObservedObject private var bar = TabBarState.shared
+    @ObservedObject private var player = Player.shared
     @State private var tab = UserDefaults.standard.integer(forKey: "HarkTab")
 
     var body: some View {
-        TabView(selection: $tab) {
-            NavigationStack { ItemsScreen(mode: .timeline) }
-                .tabItem { Label("时间线", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(0)
-                .badge(store.unreadTotal)
-            NavigationStack { ItemsScreen(mode: .starred) }
-                .tabItem { Label("收藏", systemImage: "star") }
-                .tag(1)
-            NavigationStack { ItemsScreen(mode: .later) }
-                .tabItem { Label("稍后读", systemImage: "clock") }
-                .tag(2)
-            NavigationStack { SourcesView() }
-                .tabItem { Label("订阅", systemImage: "list.bullet.rectangle") }
-                .tag(3)
-            NavigationStack { SettingsView() }
-                .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(4)
+        ZStack(alignment: .bottom) {
+            page(0) { ItemsScreen(mode: .timeline) }
+            page(1) { ItemsScreen(mode: .starred) }
+            page(2) { ItemsScreen(mode: .later) }
+            page(3) { SourcesView() }
+            page(4) { SettingsView() }
+
+            if bar.actionsOpen {
+                Color.black.opacity(0.12).ignoresSafeArea()
+                    .onTapGesture { bar.actionsOpen = false }
+                    .transition(.opacity)
+            }
+            ExpandableTabBar(selection: $tab)
         }
-        .modifier(TabMinimize())
+        .onChange(of: tab) { _ in bar.collapsed = false }
         .task { await store.refresh() }
         .onChange(of: phase) { p in
             if p == .active { Task { await store.refresh() } }
             if p == .background { store.scheduleBackgroundRefresh() }
         }
     }
-}
 
-struct TabMinimize: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.tabBarMinimizeBehavior(.onScrollDown)
-        } else {
-            content
-        }
+    /// Each tab keeps its own navigation stack alive; only the selected one is visible.
+    private func page<C: View>(_ i: Int, @ViewBuilder _ content: () -> C) -> some View {
+        NavigationStack { content() }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: player.current == nil ? 70 : 136)
+            }
+            .simultaneousGesture(DragGesture(minimumDistance: 24).onChanged { v in
+                guard abs(v.translation.height) > abs(v.translation.width) else { return }
+                if v.translation.height < -50, !bar.collapsed { bar.collapsed = true }
+                else if v.translation.height > 50, bar.collapsed { bar.collapsed = false }
+            })
+            .opacity(tab == i ? 1 : 0)
+            .allowsHitTesting(tab == i)
+            .accessibilityHidden(tab != i)
+            .zIndex(tab == i ? 1 : 0)
     }
 }

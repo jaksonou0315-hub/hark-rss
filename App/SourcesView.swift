@@ -54,6 +54,8 @@ struct SourcesView: View {
             }
         }
         .sheet(isPresented: $showAdd) { AddSourceView().environmentObject(store) }
+        .onAppear { if store.requestAddSource { store.requestAddSource = false; showAdd = true } }
+        .onChange(of: store.requestAddSource) { v in if v { store.requestAddSource = false; showAdd = true } }
         .sheet(item: $editing) { EditSourceView(source: $0).environmentObject(store) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.opml, .xml, .data]) { result in
             guard case .success(let url) = result else { return }
@@ -69,7 +71,6 @@ struct SourcesView: View {
         .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("好", role: .cancel) {}
         }
-        .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
     }
 
     private func row(_ s: FeedSource) -> some View {

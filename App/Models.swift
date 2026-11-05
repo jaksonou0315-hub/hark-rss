@@ -68,8 +68,26 @@ extension String {
         for (k, v) in ["&nbsp;": " ", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'", "&amp;": "&"] {
             s = s.replacingOccurrences(of: k, with: v)
         }
+        s = s.decodingNumericEntities
         s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Decodes &#038; / &#x26; style entities.
+    var decodingNumericEntities: String {
+        guard contains("&#") else { return self }
+        let re = try! NSRegularExpression(pattern: "&#([xX]?)([0-9a-fA-F]+);")
+        let ns = self as NSString
+        var out = ""; var last = 0
+        for m in re.matches(in: self, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let hex = ns.substring(with: m.range(at: 1)).isEmpty == false
+            let num = ns.substring(with: m.range(at: 2))
+            if let v = UInt32(num, radix: hex ? 16 : 10), let u = Unicode.Scalar(v) { out.unicodeScalars.append(u) }
+            else { out += ns.substring(with: m.range) }
+            last = m.range.location + m.range.length
+        }
+        out += ns.substring(from: last)
+        return out
     }
     var escapedHTML: String {
         replacingOccurrences(of: "&", with: "&amp;")

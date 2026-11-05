@@ -68,7 +68,6 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(AuroraBackground())
         .navigationTitle("设置")
-        .safeAreaInset(edge: .bottom) { MiniPlayerBar() }
     }
 
     private func addRule() {

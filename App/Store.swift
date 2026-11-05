@@ -29,6 +29,7 @@ final class FeedStore: ObservableObject {
         didSet { UserDefaults.standard.set(refreshMinutes, forKey: "refreshMinutes"); scheduleBackgroundRefresh() }
     }
     @Published var loading = false
+    @Published var requestAddSource = false
     @Published var lastError: String?
     @Published var lastRefresh: Date?
     var fullText: [String: String] = [:]

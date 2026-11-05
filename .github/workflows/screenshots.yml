@@ -2,7 +2,7 @@ name: Simulator screenshots
 on:
   workflow_dispatch:
   push:
-    paths: [".github/workflows/screenshots.yml"]
+    paths: [".github/workflows/screenshots.yml", "App/**"]
 permissions:
   contents: write
 jobs:
@@ -40,14 +40,16 @@ jobs:
           xcrun simctl ui $UDID appearance light
           shot 0-warmup 20 -HarkTab 0
           shot 1-timeline 12 -HarkTab 0
-          shot 2-article 16 -HarkTab 0 -HarkOpenFirst YES
+          shot 2-article 22 -HarkTab 0 -HarkOpenFirst YES
           shot 3-starred 10 -HarkTab 1
           shot 4-later 10 -HarkTab 2
           shot 5-sources 10 -HarkTab 3
           shot 6-settings 8 -HarkTab 4
+          shot 9-actions 10 -HarkTab 0 -HarkActions YES
+          shot 10-collapsed 10 -HarkTab 1 -HarkBarCollapsed YES
           xcrun simctl ui $UDID appearance dark
           shot 7-timeline-dark 14 -HarkTab 0 -HarkPlay YES
-          shot 8-article-dark 16 -HarkTab 0 -HarkOpenFirst YES
+          shot 8-article-dark 22 -HarkTab 0 -HarkOpenFirst YES
           rm shots/0-warmup.png; ls -la shots
       - name: Publish
         env:
