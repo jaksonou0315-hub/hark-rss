@@ -1,11 +1,9 @@
 import SwiftUI
 import UserNotifications
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
-        return true
-    }
+/// Shows banners while the app is open. Not UIKit: a plain notification-center delegate.
+final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificationDelegate()
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound, .list]
     }
@@ -13,8 +11,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
 @main
 struct HarkRSSApp: App {
-    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = FeedStore.shared
+
+    init() { UNUserNotificationCenter.current().delegate = NotificationDelegate.shared }
 
     var body: some Scene {
         WindowGroup {
