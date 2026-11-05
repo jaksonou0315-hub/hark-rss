@@ -19,8 +19,8 @@ struct ContentView: View {
             .navigationDestination(for: FeedItem.self) { DetailView(item: $0) }
             .refreshable { await store.refresh() }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("全部已读") { store.markAllRead() }.disabled(store.unread == 0) }
-                ToolbarItem(placement: .topBarTrailing) { Button { showSources = true } label: { Image(systemName: "dot.radiowaves.up.forward") } }
+                ToolbarItem(placement: .navigationBarLeading) { Button("全部已读") { store.markAllRead() }.disabled(store.unread == 0) }
+                ToolbarItem(placement: .navigationBarTrailing) { Button { showSources = true } label: { Image(systemName: "dot.radiowaves.up.forward") } }
             }
             .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
             .sheet(isPresented: $showSources) { SourcesView() }

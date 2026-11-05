@@ -1,5 +1,6 @@
 name: HarkRSS
 options:
+  projectFormat: xcode16_0
   bundleIdPrefix: com.ouyanghong
   deploymentTarget:
     iOS: "16.0"
