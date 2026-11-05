@@ -3,7 +3,7 @@ options:
   projectFormat: xcode16_0
   bundleIdPrefix: com.ouyanghong
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "17.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"

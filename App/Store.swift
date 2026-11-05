@@ -49,7 +49,14 @@ final class FeedStore: ObservableObject {
         notify = d.bool(forKey: "notify")
         let m = d.integer(forKey: "refreshMinutes")
         refreshMinutes = m == 0 ? 30 : m
-        items = Self.load("itemCache", [FeedItem].self) ?? []
+        if let stored = ArticleStore.loadAll() {
+            items = stored
+        } else {
+            // First launch on 2.3: move the old JSON / UserDefaults cache into SwiftData.
+            items = Self.load("itemCache", [FeedItem].self) ?? []
+            if !items.isEmpty { ArticleStore.sync(items) }
+            try? FileManager.default.removeItem(at: Self.dataDir.appendingPathComponent("itemCache.json"))
+        }
         health = Self.load("health", [UUID: SourceHealth].self) ?? [:]
         retentionDays = d.object(forKey: "retentionDays") == nil ? 30 : d.integer(forKey: "retentionDays")
         if sources.isEmpty {
@@ -174,9 +181,9 @@ final class FeedStore: ObservableObject {
         sources.removeAll { $0.id == s.id }
         health[s.id] = nil
         items.removeAll { $0.sourceID == s.id }
-        persist(items, "itemCache")
+        ArticleStore.sync(items)
     }
-    func clearCache() { items = []; persist(items, "itemCache"); fullText = [:]; health = [:] }
+    func clearCache() { items = []; ArticleStore.sync(items); fullText = [:]; health = [:] }
 
     /// Drops articles older than the retention window. Starred and read-later items are always kept.
     private func pruned(_ list: [FeedItem]) -> [FeedItem] {
@@ -196,7 +203,7 @@ final class FeedStore: ObservableObject {
         let p = pruned(items)
         guard p.count != items.count else { return }
         items = p
-        persist(items, "itemCache")
+        ArticleStore.sync(items)
         let alive = Set(p.map(\.id)).union(saved.keys)
         let r = readIDs.intersection(alive)
         if r.count != readIDs.count { readIDs = r }
@@ -265,7 +272,7 @@ final class FeedStore: ObservableObject {
         merged = pruned(merged)
         let newOnes = merged.filter { !old.contains($0.id) && !readIDs.contains($0.id) && !isMuted($0) }
         items = merged
-        persist(items, "itemCache")
+        ArticleStore.sync(items)
         let alive = Set(merged.map(\.id)).union(saved.keys)
         let r = readIDs.intersection(alive)
         if r.count != readIDs.count { readIDs = r }
