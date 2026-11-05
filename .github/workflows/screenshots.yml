@@ -1,10 +1,7 @@
 name: Simulator screenshots
 on:
   workflow_dispatch:
-  push:
-    paths: [".github/workflows/screenshots.yml", "App/**"]
-permissions:
-  contents: write
+
 jobs:
   shots:
     runs-on: macos-26
