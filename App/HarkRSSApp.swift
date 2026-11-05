@@ -45,8 +45,10 @@ struct RootView: View {
                 Color.black.opacity(0.12).ignoresSafeArea()
                     .onTapGesture { bar.actionsOpen = false }
                     .transition(.opacity)
+                    .zIndex(5)
             }
             ExpandableTabBar(selection: $tab)
+                .zIndex(10)
         }
         .onChange(of: tab) { _ in bar.collapsed = false }
         .task { await store.refresh() }
