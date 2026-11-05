@@ -99,11 +99,13 @@ enum HTMLParser {
             if buf.characters.last == " " || buf.characters.last == "\n" || buf.characters.isEmpty, t.hasPrefix(" ") { t.removeFirst() }
             guard !t.isEmpty else { return }
             var a = AttributedString(t)
-            var font: Font = heading > 0 ? (heading <= 2 ? .title2.bold() : .title3.bold()) : .body
-            if mono > 0 { font = .system(.callout, design: .monospaced) }
-            if bold > 0 && heading == 0 { font = font.bold() }
-            if italic > 0 { font = font.italic() }
-            a.font = font
+            // Body text keeps no font of its own, so the reader's size and serif settings apply.
+            if heading > 0 { a.font = heading <= 2 ? .title2.bold() : .title3.bold() }
+            else if mono > 0 { a.font = .system(.callout, design: .monospaced) }
+            var intent: InlinePresentationIntent = []
+            if bold > 0 && heading == 0 { intent.insert(.stronglyEmphasized) }
+            if italic > 0 { intent.insert(.emphasized) }
+            if !intent.isEmpty { a.inlinePresentationIntent = intent }
             if let l = links.last, let u = l { a.link = u; a.foregroundColor = Color.accentColor }
             if mono > 0 { a.backgroundColor = Color.gray.opacity(0.15) }
             buf += a
@@ -183,12 +185,23 @@ enum HTMLParser {
 /// Renders parsed blocks natively.
 struct HTMLContentView: View {
     let blocks: [HTMLBlock]
+    var serif: Bool
+    var lineSpacing: CGFloat
     @Environment(\.openURL) private var openURL
+
+    init(blocks: [HTMLBlock], serif: Bool = false, lineSpacing: CGFloat = 6) {
+        self.blocks = blocks
+        self.serif = serif
+        self.lineSpacing = lineSpacing
+    }
+
+    private var bodyFont: Font { .system(.body, design: serif ? .serif : .default) }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 14) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in block(b) }
         }
+        .scrollTargetLayout()
         .textSelection(.enabled)
     }
 
@@ -198,11 +211,11 @@ struct HTMLContentView: View {
         case .heading(_, let t):
             Text(t).padding(.top, 6)
         case .paragraph(let t):
-            Text(t).font(.body).lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+            Text(t).font(bodyFont).lineSpacing(lineSpacing).fixedSize(horizontal: false, vertical: true)
         case .quote(let t):
             HStack(alignment: .top, spacing: 12) {
                 Capsule().fill(Color.accentColor.opacity(0.6)).frame(width: 3)
-                Text(t).foregroundStyle(.secondary).lineSpacing(5)
+                Text(t).font(bodyFont).foregroundStyle(.secondary).lineSpacing(lineSpacing - 1)
             }
             .padding(14)
             .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -214,7 +227,7 @@ struct HTMLContentView: View {
         case .bullet(let m, let t):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(m).foregroundStyle(.secondary).monospacedDigit()
-                Text(t).lineSpacing(5)
+                Text(t).font(bodyFont).lineSpacing(lineSpacing - 1)
             }
             .padding(.leading, 4)
         case .image(let u):

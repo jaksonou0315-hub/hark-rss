@@ -8,6 +8,14 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
+                NavigationLink { ReaderSettingsForm().navigationTitle("阅读与列表") } label: {
+                    Label("阅读与列表", systemImage: "textformat.size")
+                }
+            } footer: {
+                Text("字号、行距、衬线字体、纸张或夜间主题、朗读速度，以及列表样式。")
+            }
+
+            Section {
                 Toggle("新消息通知", isOn: $store.notify)
                 Picker("后台刷新间隔", selection: $store.refreshMinutes) {
                     Text("15 分钟").tag(15)
@@ -81,6 +89,16 @@ struct SettingsView: View {
                 LabeledContent("收藏", value: "\(store.starredIDs.count) 篇")
                 Button("清除已读记录") { store.readIDs = [] }
                 Button("清空文章缓存", role: .destructive) { store.clearCache() }
+            }
+
+            Section {
+                Label("“刷新 Hark 推送”", systemImage: "arrow.clockwise")
+                Label("“Hark 推送有几条未读”", systemImage: "circle.inset.filled")
+                Label("“用 Hark 推送添加订阅”", systemImage: "plus.circle")
+            } header: {
+                Text("Siri 与快捷指令")
+            } footer: {
+                Text("在「快捷指令」App 里也能找到这些动作。把「添加到 Hark 推送」做成分享菜单快捷指令，就能在 Safari 里一键订阅当前网站。收藏和稍后读的文章可以在系统搜索里搜到。")
             }
 
             Section("关于") {

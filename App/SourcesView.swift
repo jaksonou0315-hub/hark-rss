@@ -119,10 +119,18 @@ struct AddSourceView: View {
     @State private var errorText: String?
     @State private var template = RSSHub.templates[0]
     @State private var templateID = ""
+    let initialInput: String
+
+    init(initialInput: String = "") { self.initialInput = initialInput }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    NavigationLink { CatalogView() } label: {
+                        Label("推荐订阅源目录", systemImage: "books.vertical")
+                    }
+                }
                 Section {
                     TextField("网址或 RSS 地址", text: $input)
                         .keyboardType(.URL)
@@ -197,6 +205,11 @@ struct AddSourceView: View {
             .navigationTitle("添加订阅")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+            .task {
+                guard !initialInput.isEmpty, input.isEmpty else { return }
+                input = initialInput
+                await find()
+            }
         }
     }
 

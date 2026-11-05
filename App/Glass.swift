@@ -61,8 +61,26 @@ struct AuroraBackground: View {
 
 struct MiniPlayerBar: View {
     @ObservedObject private var p = Player.shared
+    @ObservedObject private var sp = Speaker.shared
     var body: some View {
-        if let item = p.current {
+        if let item = sp.item {
+            GlassGroup(spacing: 8) {
+                HStack(spacing: 14) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.title3).symbolRenderingMode(.hierarchical)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        ProgressView(value: sp.progress)
+                    }
+                    Spacer(minLength: 4)
+                    Button { sp.toggle() } label: { Image(systemName: sp.isSpeaking ? "pause.fill" : "play.fill").font(.title3) }
+                    Button { sp.stop() } label: { Image(systemName: "xmark").font(.caption.bold()) }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 18).padding(.vertical, 12)
+                .glass(in: Capsule(), interactive: true)
+            }
+        } else if let item = p.current {
             GlassGroup(spacing: 8) {
                 HStack(spacing: 14) {
                     Image(systemName: item.isVideo ? "play.rectangle" : "waveform")

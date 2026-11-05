@@ -16,8 +16,8 @@ enum HarkTab: Int, CaseIterable, Identifiable {
 /// Shared state of the floating tab bar.
 final class TabBarState: ObservableObject {
     static let shared = TabBarState()
-    @Published var collapsed = UserDefaults.standard.bool(forKey: "HarkBarCollapsed")
-    @Published var actionsOpen = UserDefaults.standard.bool(forKey: "HarkActions")
+    @Published var collapsed = Demo.flag("HarkBarCollapsed")
+    @Published var actionsOpen = Demo.flag("HarkActions")
     /// Set while an article is open, so the article's own glass toolbar owns the bottom edge.
     @Published var hidden = false
 }

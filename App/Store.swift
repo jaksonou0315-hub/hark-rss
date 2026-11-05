@@ -33,7 +33,7 @@ final class FeedStore: ObservableObject {
         didSet { UserDefaults.standard.set(retentionDays, forKey: "retentionDays"); pruneNow() }
     }
     @Published var loading = false
-    @Published var requestAddSource = UserDefaults.standard.bool(forKey: "HarkShowAdd")
+    @Published var requestAddSource = Demo.flag("HarkShowAdd")
     @Published var lastError: String?
     @Published var lastRefresh: Date?
     var fullText: [String: String] = [:]
@@ -65,6 +65,7 @@ final class FeedStore: ObservableObject {
             sources = [FeedSource(name: "Hark 推送", url: FeedSource.defaultFeed, group: "Hark")]
             persist(sources, "sources")
         }
+        #if DEBUG
         if d.bool(forKey: "HarkDemo") {
             let demo = [("少数派", "https://sspai.com/feed", "科技"),
                         ("The Verge", "https://www.theverge.com/rss/index.xml", "科技"),
@@ -77,9 +78,11 @@ final class FeedStore: ObservableObject {
             if rules.isEmpty { rules = [FilterRule(keyword: "AI", kind: .highlight), FilterRule(keyword: "广告", kind: .mute)] }
             persist(sources, "sources"); persist(rules, "rules")
         }
+        #endif
     }
 
     private func applyDemoState() {
+        #if DEBUG
         let d = UserDefaults.standard
         guard d.bool(forKey: "HarkDemo") else { return }
         if starredIDs.isEmpty {
@@ -92,6 +95,7 @@ final class FeedStore: ObservableObject {
         if d.bool(forKey: "HarkPlay"), Player.shared.current == nil, let m = items.first(where: { $0.hasMedia && $0.isAudio }) {
             Player.shared.play(m)
         }
+        #endif
     }
 
     // MARK: persistence
@@ -168,9 +172,17 @@ final class FeedStore: ObservableObject {
     func markAllRead(_ list: [FeedItem]) { readIDs.formUnion(list.map(\.id)) }
     func toggleStar(_ i: FeedItem) {
         if isStarred(i) { starredIDs.remove(i.id) } else { saved[i.id] = i; starredIDs.insert(i.id) }
+        reindexSpotlight()
     }
     func toggleLater(_ i: FeedItem) {
         if isLater(i) { laterIDs.remove(i.id) } else { saved[i.id] = i; laterIDs.insert(i.id) }
+        reindexSpotlight()
+    }
+    func item(withID id: String) -> FeedItem? { items.first { $0.id == id } ?? saved[id] }
+    /// Starred and read-later articles go into system search.
+    func reindexSpotlight() {
+        var seen = Set<String>()
+        Spotlight.index((starredItems + laterItems).filter { seen.insert($0.id).inserted })
     }
     func addSource(name: String, url: String, group: String) {
         guard !sources.contains(where: { $0.url == url }) else { return }
@@ -292,7 +304,7 @@ final class FeedStore: ObservableObject {
     nonisolated static func fetch(_ s: FeedSource, etag: String? = nil, lastModified: String? = nil) async -> FetchResult {
         guard let u = URL(string: s.url) else { return .failed("地址无效") }
         var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue("HarkRSS/2.3 (iOS)", forHTTPHeaderField: "User-Agent")
+        req.setValue("HarkRSS/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         if let lastModified { req.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         do {

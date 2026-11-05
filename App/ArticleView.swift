@@ -14,6 +14,19 @@ struct ArticleView: View {
     @State private var translated: [HTMLBlock]?
     @State private var translateFailed = false
     @State private var canTranslate = false
+    @State private var anchor: Int?
+    @State private var resumed = false
+    @State private var showReader = false
+    @State private var summary: String?
+    @State private var summarizing = false
+    @State private var summaryFailed = false
+    @ObservedObject private var speaker = Speaker.shared
+    @AppStorage("readerSize") private var readerSize = 2
+    @AppStorage("readerSpacing") private var readerSpacing = 6.0
+    @AppStorage("readerSerif") private var readerSerif = false
+    @AppStorage("readerTheme") private var readerThemeRaw = ReaderTheme.auto.rawValue
+    private var theme: ReaderTheme { ReaderTheme(rawValue: readerThemeRaw) ?? .auto }
+    private var shownBlocks: [HTMLBlock] { showingTranslation ? (translated ?? blocks) : blocks }
 
     private var translateTexts: [String] { [item.title] + blocks.compactMap(\.plainText) }
     private var showingTranslation: Bool { translateOn && translated != nil }
@@ -24,23 +37,26 @@ struct ArticleView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            AuroraBackground().opacity(0.45)
+            ReaderBackground(theme: theme)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    HTMLContentView(blocks: showingTranslation ? (translated ?? blocks) : blocks)
+                    HTMLContentView(blocks: shownBlocks, serif: readerSerif, lineSpacing: CGFloat(readerSpacing))
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 120)
                 .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                .dynamicTypeSize(ReaderPrefs.size(readerSize))
             }
+            .scrollPosition(id: $anchor, anchor: .top)
             VStack(spacing: 10) {
                 MiniPlayerBar().padding(.horizontal, 14)
-                actionBar
+                actionBar.sheet(isPresented: $showReader) { ReaderSettingsSheet() }
             }
         }
+        .modifier(ReaderScheme(theme: theme))
         .navigationTitle(item.source)
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { TabBarState.shared.hidden = false }
@@ -56,7 +72,17 @@ struct ArticleView: View {
             if translateOn { translateOn = false }
             let sample = ([item.title] + blocks.compactMap(\.plainText)).joined(separator: " ")
             canTranslate = ArticleLanguage.available && ArticleLanguage.needsTranslation(sample)
+            if !resumed, let p = ReadingProgress.position(item.id), p > 1, p < blocks.count {
+                resumed = true
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                anchor = p
+            }
         }
+        .onChange(of: anchor) { v in
+            guard let v, !blocks.isEmpty else { return }
+            if v >= blocks.count - 2 { ReadingProgress.clear(item.id) } else if v > 1 { ReadingProgress.save(item.id, v) }
+        }
+        .alert("摘要没有生成", isPresented: $summaryFailed) { Button("好", role: .cancel) {} } message: { Text("本机模型暂时不可用，稍后再试。") }
         .modifier(TranslateTask(active: $translateOn, texts: translateTexts) { out in
             guard let out, !out.isEmpty else { translateOn = false; translateFailed = true; return }
             translatedTitle = out[0]
@@ -83,7 +109,7 @@ struct ArticleView: View {
                     }
                     .glassButton(prominent: true)
                 }
-                HStack(spacing: 22) {
+                HStack(spacing: 20) {
                     barButton(store.isStarred(item) ? "star.fill" : "star") { store.toggleStar(item) }
                     barButton(store.isLater(item) ? "clock.fill" : "clock") { store.toggleLater(item) }
                     if canTranslate {
@@ -91,18 +117,27 @@ struct ArticleView: View {
                             if translateOn { translateOn = false } else { translateOn = true }
                         }
                     }
+                    barButton(speakIcon) { speak() }
                     if link != nil {
                         if loadingFull {
                             ProgressView().frame(width: 26, height: 26)
                         } else {
                             barButton(fullText == nil ? "doc.text.magnifyingglass" : "doc.plaintext") { Task { await toggleFull() } }
                         }
-                        if let u = link {
-                            ShareLink(item: u) { Image(systemName: "square.and.arrow.up").font(.title3) }
-                                .buttonStyle(.plain)
-                        }
-                        barButton("safari") { if let u = link { openURL(u) } }
                     }
+                    Menu {
+                        Button { showReader = true } label: { Label("阅读设置", systemImage: "textformat.size") }
+                        if AISummary.available {
+                            Button { Task { await summarize() } } label: { Label("AI 摘要", systemImage: "sparkles") }
+                        }
+                        if let u = link {
+                            ShareLink(item: u) { Label("分享", systemImage: "square.and.arrow.up") }
+                            Button { openURL(u) } label: { Label("在浏览器打开", systemImage: "safari") }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").font(.title3).frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 22)
                 .padding(.vertical, 13)
@@ -133,6 +168,20 @@ struct ArticleView: View {
                     }
                 }
             }
+            if summarizing || summary != nil {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "sparkles").foregroundStyle(.purple)
+                    if let summary {
+                        Text(summary).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("正在生成摘要…").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous), tint: .purple.opacity(0.15))
+            }
             if fullText != nil {
                 Label("已显示全文", systemImage: "doc.plaintext").font(.caption).foregroundStyle(.secondary)
             }
@@ -150,6 +199,26 @@ struct ArticleView: View {
         Button(action: action) { Image(systemName: icon).font(.title3) }
             .buttonStyle(.plain)
             .frame(width: 26, height: 26)
+    }
+
+    private var speakIcon: String {
+        guard speaker.item?.id == item.id else { return "speaker.wave.2" }
+        return speaker.isSpeaking ? "pause.circle" : "play.circle"
+    }
+
+    private func speak() {
+        if speaker.item?.id == item.id { speaker.toggle(); return }
+        let title = showingTranslation ? (translatedTitle ?? item.title) : item.title
+        let text = ([title] + shownBlocks.compactMap(\.plainText)).joined(separator: "\n")
+        speaker.speak(item, text: text)
+    }
+
+    private func summarize() async {
+        guard summary == nil, !summarizing else { return }
+        summarizing = true
+        let text = blocks.compactMap(\.plainText).joined(separator: "\n")
+        do { summary = try await AISummary.summarize(title: item.title, text: text) } catch { summaryFailed = true }
+        summarizing = false
     }
 
     private func toggleFull() async {

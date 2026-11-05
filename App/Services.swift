@@ -89,9 +89,16 @@ final class Player: ObservableObject {
     private init() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
         let cc = MPRemoteCommandCenter.shared()
-        cc.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.resume() }; return .success }
-        cc.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.pause() }; return .success }
-        cc.togglePlayPauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.toggle() }; return .success }
+        // Lock-screen controls drive whichever is active: the article reader voice or the media player.
+        cc.playCommand.addTarget { [weak self] _ in
+            Task { @MainActor in if Speaker.shared.isActive { Speaker.shared.resume() } else { self?.resume() } }; return .success
+        }
+        cc.pauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in if Speaker.shared.isActive { Speaker.shared.pause() } else { self?.pause() } }; return .success
+        }
+        cc.togglePlayPauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in if Speaker.shared.isActive { Speaker.shared.toggle() } else { self?.toggle() } }; return .success
+        }
         cc.skipForwardCommand.preferredIntervals = [30]
         cc.skipForwardCommand.addTarget { [weak self] _ in Task { @MainActor in self?.skip(30) }; return .success }
         cc.skipBackwardCommand.preferredIntervals = [15]
@@ -100,6 +107,7 @@ final class Player: ObservableObject {
 
     func play(_ item: FeedItem) {
         guard let u = URL(string: item.enclosureURL) else { return }
+        if Speaker.shared.isActive { Speaker.shared.stop() }
         try? AVAudioSession.sharedInstance().setActive(true)
         if current?.id != item.id {
             avPlayer.replaceCurrentItem(with: AVPlayerItem(url: u))
