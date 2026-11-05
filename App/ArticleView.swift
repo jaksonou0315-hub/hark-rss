@@ -28,11 +28,16 @@ struct ArticleView: View {
                 .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            actionBar
+            VStack(spacing: 10) {
+                MiniPlayerBar().padding(.horizontal, 14)
+                actionBar
+            }
         }
         .navigationTitle(item.source)
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { TabBarState.shared.hidden = false }
         .onAppear {
+            TabBarState.shared.hidden = true
             store.markRead(item)
             if let c = store.fullText[item.id] { fullText = c }
         }

@@ -47,9 +47,13 @@ struct RootView: View {
                     .transition(.opacity)
                     .zIndex(5)
             }
-            ExpandableTabBar(selection: $tab)
-                .zIndex(10)
+            if !bar.hidden {
+                ExpandableTabBar(selection: $tab)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(10)
+            }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: bar.hidden)
         .onChange(of: tab) { _ in bar.collapsed = false }
         .task { await store.refresh() }
         .task {
@@ -71,7 +75,7 @@ struct RootView: View {
             if let path { NavigationStack(path: path) { content() } } else { NavigationStack { content() } }
         }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                Color.clear.frame(height: player.current == nil ? 70 : 136)
+                Color.clear.frame(height: bar.hidden ? 0 : (player.current == nil ? 70 : 136))
             }
             .simultaneousGesture(DragGesture(minimumDistance: 24).onChanged { v in
                 guard abs(v.translation.height) > abs(v.translation.width) else { return }

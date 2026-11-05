@@ -18,6 +18,8 @@ final class TabBarState: ObservableObject {
     static let shared = TabBarState()
     @Published var collapsed = UserDefaults.standard.bool(forKey: "HarkBarCollapsed")
     @Published var actionsOpen = UserDefaults.standard.bool(forKey: "HarkActions")
+    /// Set while an article is open, so the article's own glass toolbar owns the bottom edge.
+    @Published var hidden = false
 }
 
 /// Floating Liquid Glass tab bar.
