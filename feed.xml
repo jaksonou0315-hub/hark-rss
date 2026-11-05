@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>Hark 推送</title>
+<link>https://github.com/jaksonou0315-hub/hark-rss</link>
+<description>Hark 发给你的消息</description>
+<lastBuildDate>Thu, 05 Nov 2026 02:23:58 +0000</lastBuildDate>
+<item>
+<title>欢迎使用 Hark 推送</title>
+<link>https://github.com/jaksonou0315-hub/hark-rss</link>
+<guid>welcome-1</guid>
+<pubDate>Thu, 05 Nov 2026 02:23:58 +0000</pubDate>
+<description>以后 Hark 推送给你的消息都会出现在这里。下拉刷新就能收到最新消息。</description>
+</item>
+</channel>
+</rss>

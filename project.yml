@@ -1,0 +1,22 @@
+name: HarkRSS
+options:
+  bundleIdPrefix: com.ouyanghong
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  HarkRSS:
+    type: application
+    platform: iOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkrss
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Hark 推送"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
