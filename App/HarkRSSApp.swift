@@ -13,7 +13,11 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 struct HarkRSSApp: App {
     @StateObject private var store = FeedStore.shared
 
-    init() { UNUserNotificationCenter.current().delegate = NotificationDelegate.shared }
+    init() {
+        UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        // Disk-backed cache for thumbnails and article images (AsyncImage uses the shared session).
+        URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20, diskPath: "harkrss-images")
+    }
 
     var body: some Scene {
         WindowGroup {

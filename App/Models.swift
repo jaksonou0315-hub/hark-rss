@@ -15,6 +15,7 @@ struct FeedItem: Identifiable, Hashable, Codable {
     var enclosureURL: String = ""
     var enclosureType: String = ""
     var categories: [String] = []
+    var firstSeen: Date? = nil
 
     var plainSummary: String { summary.strippingHTML }
     var isAudio: Bool {
@@ -26,6 +27,25 @@ struct FeedItem: Identifiable, Hashable, Codable {
         return enclosureType.hasPrefix("video") || u.hasSuffix(".mp4") || u.hasSuffix(".m3u8") || u.hasSuffix(".mov")
     }
     var hasMedia: Bool { !enclosureURL.isEmpty && (isAudio || isVideo) }
+}
+
+/// Per-feed fetch status, shown on the 订阅 tab.
+struct SourceHealth: Codable, Hashable {
+    var etag: String?
+    var lastModified: String?
+    var lastAttempt: Date?
+    var lastSuccess: Date?
+    var newest: Date?
+    var error: String?
+    var count: Int?
+
+    enum State { case ok, stale, failing, unknown }
+    var state: State {
+        if error != nil { return .failing }
+        guard lastSuccess != nil else { return .unknown }
+        if let n = newest, n < Date().addingTimeInterval(-30 * 86400) { return .stale }
+        return .ok
+    }
 }
 
 struct FeedSource: Identifiable, Codable, Hashable {

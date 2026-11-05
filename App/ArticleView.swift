@@ -9,6 +9,14 @@ struct ArticleView: View {
     @State private var fullError = false
     @State private var showVideo = false
     @State private var blocks: [HTMLBlock] = []
+    @State private var translateOn = false
+    @State private var translatedTitle: String?
+    @State private var translated: [HTMLBlock]?
+    @State private var translateFailed = false
+    @State private var canTranslate = false
+
+    private var translateTexts: [String] { [item.title] + blocks.compactMap(\.plainText) }
+    private var showingTranslation: Bool { translateOn && translated != nil }
     @Environment(\.openURL) private var openURL
 
     private var bodyHTML: String { fullText ?? (item.content.isEmpty ? item.summary : item.content) }
@@ -20,7 +28,7 @@ struct ArticleView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    HTMLContentView(blocks: blocks)
+                    HTMLContentView(blocks: showingTranslation ? (translated ?? blocks) : blocks)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -44,7 +52,21 @@ struct ArticleView: View {
         .task(id: bodyHTML) {
             let html = bodyHTML, base = link
             blocks = await Task.detached(priority: .userInitiated) { HTMLParser.parse(html, base: base) }.value
+            translated = nil; translatedTitle = nil
+            if translateOn { translateOn = false }
+            let sample = ([item.title] + blocks.compactMap(\.plainText)).joined(separator: " ")
+            canTranslate = ArticleLanguage.available && ArticleLanguage.needsTranslation(sample)
         }
+        .modifier(TranslateTask(active: $translateOn, texts: translateTexts) { out in
+            guard let out, !out.isEmpty else { translateOn = false; translateFailed = true; return }
+            translatedTitle = out[0]
+            var rest = out.dropFirst().makeIterator()
+            translated = blocks.map { b in
+                if b.plainText != nil, let t = rest.next() { return b.replacingText(t) }
+                return b
+            }
+        })
+        .alert("翻译没有完成", isPresented: $translateFailed) { Button("好", role: .cancel) {} } message: { Text("请在系统「设置 > 通用 > 语言与地区 > 翻译语言」下载中文和原文语言后再试。") }
         .sheet(isPresented: $showVideo) { VideoPlayer(player: Player.shared.avPlayer).ignoresSafeArea() }
         .alert("抓取全文失败", isPresented: $fullError) { Button("好", role: .cancel) {} } message: { Text("可以试试阅读模式或打开原文。") }
     }
@@ -64,6 +86,11 @@ struct ArticleView: View {
                 HStack(spacing: 22) {
                     barButton(store.isStarred(item) ? "star.fill" : "star") { store.toggleStar(item) }
                     barButton(store.isLater(item) ? "clock.fill" : "clock") { store.toggleLater(item) }
+                    if canTranslate {
+                        barButton(translateOn ? "character.bubble.fill" : "character.bubble") {
+                            if translateOn { translateOn = false } else { translateOn = true }
+                        }
+                    }
                     if link != nil {
                         if loadingFull {
                             ProgressView().frame(width: 26, height: 26)
@@ -87,7 +114,7 @@ struct ArticleView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(item.title)
+            Text(showingTranslation ? (translatedTitle ?? item.title) : item.title)
                 .font(.system(.title, design: .default).weight(.bold))
                 .fixedSize(horizontal: false, vertical: true)
             let date = item.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? ""
@@ -108,6 +135,13 @@ struct ArticleView: View {
             }
             if fullText != nil {
                 Label("已显示全文", systemImage: "doc.plaintext").font(.caption).foregroundStyle(.secondary)
+            }
+            if translateOn {
+                HStack(spacing: 6) {
+                    if translated == nil { ProgressView().controlSize(.small); Text("正在本机翻译…") }
+                    else { Image(systemName: "character.bubble"); Text("已翻译为中文 · 再点一次看原文") }
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

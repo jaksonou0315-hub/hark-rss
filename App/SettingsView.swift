@@ -49,6 +49,30 @@ struct SettingsView: View {
                 Text("屏蔽：标题或内容含关键词的文章不显示。高亮：卡片用橙色玻璃标出。")
             }
 
+            Section {
+                Picker("自动清理旧文章", selection: $store.retentionDays) {
+                    Text("7 天").tag(7); Text("30 天").tag(30); Text("90 天").tag(90); Text("永不").tag(0)
+                }
+                LabeledContent("图片缓存", value: ByteCountFormatter.string(fromByteCount: Int64(imageCache), countStyle: .file))
+                LabeledContent("文章数据", value: ByteCountFormatter.string(fromByteCount: store.dataSize, countStyle: .file))
+                Button("清空图片缓存") { URLCache.shared.removeAllCachedResponses(); imageCache = 0 }
+            } header: {
+                Text("存储")
+            } footer: {
+                Text("收藏和稍后读的文章不会被清理。图片缓存在本机，看过的图离线也能显示。")
+            }
+
+            Section {
+                TextField(RSSHub.defaultInstance, text: $rsshub)
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .onSubmit { RSSHub.instance = rsshub }
+                    .onChange(of: rsshub) { v in RSSHub.instance = v }
+            } header: {
+                Text("RSSHub 实例")
+            } footer: {
+                Text("留空就用公共实例 rsshub.app。已添加的订阅地址不会自动跟着改。")
+            }
+
             Section("数据") {
                 if let d = store.lastRefresh {
                     LabeledContent("上次刷新", value: d.formatted(date: .omitted, time: .shortened))
@@ -69,6 +93,9 @@ struct SettingsView: View {
         .background(AuroraBackground())
         .navigationTitle("设置")
     }
+
+    @State private var imageCache = URLCache.shared.currentDiskUsage
+    @State private var rsshub = UserDefaults.standard.string(forKey: "rsshubInstance") ?? ""
 
     private func addRule() {
         store.rules.append(FilterRule(keyword: newKeyword.trimmingCharacters(in: .whitespaces), kind: newKind))

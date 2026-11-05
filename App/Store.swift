@@ -28,8 +28,12 @@ final class FeedStore: ObservableObject {
     @Published var refreshMinutes: Int {
         didSet { UserDefaults.standard.set(refreshMinutes, forKey: "refreshMinutes"); scheduleBackgroundRefresh() }
     }
+    @Published var health: [UUID: SourceHealth] { didSet { persist(health, "health") } }
+    @Published var retentionDays: Int {
+        didSet { UserDefaults.standard.set(retentionDays, forKey: "retentionDays"); pruneNow() }
+    }
     @Published var loading = false
-    @Published var requestAddSource = false
+    @Published var requestAddSource = UserDefaults.standard.bool(forKey: "HarkShowAdd")
     @Published var lastError: String?
     @Published var lastRefresh: Date?
     var fullText: [String: String] = [:]
@@ -46,6 +50,8 @@ final class FeedStore: ObservableObject {
         let m = d.integer(forKey: "refreshMinutes")
         refreshMinutes = m == 0 ? 30 : m
         items = Self.load("itemCache", [FeedItem].self) ?? []
+        health = Self.load("health", [UUID: SourceHealth].self) ?? [:]
+        retentionDays = d.object(forKey: "retentionDays") == nil ? 30 : d.integer(forKey: "retentionDays")
         if sources.isEmpty {
             sources = [FeedSource(name: "Hark 推送", url: FeedSource.defaultFeed, group: "Hark")]
             persist(sources, "sources")
@@ -80,12 +86,37 @@ final class FeedStore: ObservableObject {
     }
 
     // MARK: persistence
+    /// Data lives in JSON files under Application Support, written off the main thread.
+    /// Older builds kept it in UserDefaults; it is migrated on first read.
+    private static let ioQueue = DispatchQueue(label: "harkrss.io", qos: .utility)
+    private static var pending: [String: DispatchWorkItem] = [:]
+    static var dataDir: URL = {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HarkRSS", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+    private static func file(_ k: String) -> URL { dataDir.appendingPathComponent(k + ".json") }
+
     private func persist<T: Encodable>(_ v: T, _ k: String) {
-        if let data = try? JSONEncoder().encode(v) { UserDefaults.standard.set(data, forKey: k) }
+        Self.pending[k]?.cancel()
+        let work = DispatchWorkItem {
+            guard let data = try? JSONEncoder().encode(v) else { return }
+            try? data.write(to: Self.file(k), options: .atomic)
+        }
+        Self.pending[k] = work
+        Self.ioQueue.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
     private static func load<T: Decodable>(_ k: String, _ t: T.Type) -> T? {
+        if let data = try? Data(contentsOf: file(k)) { return try? JSONDecoder().decode(T.self, from: data) }
         guard let data = UserDefaults.standard.data(forKey: k) else { return nil }
+        try? data.write(to: file(k), options: .atomic)
+        UserDefaults.standard.removeObject(forKey: k)
         return try? JSONDecoder().decode(T.self, from: data)
+    }
+    var dataSize: Int64 {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: Self.dataDir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return urls.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
     }
 
     // MARK: queries
@@ -141,10 +172,35 @@ final class FeedStore: ObservableObject {
     }
     func removeSource(_ s: FeedSource) {
         sources.removeAll { $0.id == s.id }
+        health[s.id] = nil
         items.removeAll { $0.sourceID == s.id }
         persist(items, "itemCache")
     }
-    func clearCache() { items = []; persist(items, "itemCache"); fullText = [:] }
+    func clearCache() { items = []; persist(items, "itemCache"); fullText = [:]; health = [:] }
+
+    /// Drops articles older than the retention window. Starred and read-later items are always kept.
+    private func pruned(_ list: [FeedItem]) -> [FeedItem] {
+        let keep = starredIDs.union(laterIDs)
+        let ids = Set(sources.map(\.id))
+        let cutoff = retentionDays > 0 ? Date().addingTimeInterval(-Double(retentionDays) * 86400) : nil
+        var out = list.filter { i in
+            if keep.contains(i.id) { return true }
+            if let sid = i.sourceID, !ids.contains(sid) { return false }
+            guard let cutoff else { return true }
+            return (i.date ?? i.firstSeen ?? Date()) >= cutoff
+        }
+        if out.count > 4000 { out = Array(out.prefix(4000)) }
+        return out
+    }
+    func pruneNow() {
+        let p = pruned(items)
+        guard p.count != items.count else { return }
+        items = p
+        persist(items, "itemCache")
+        let alive = Set(p.map(\.id)).union(saved.keys)
+        let r = readIDs.intersection(alive)
+        if r.count != readIDs.count { readIDs = r }
+    }
 
     // MARK: refresh
     @discardableResult
@@ -152,28 +208,69 @@ final class FeedStore: ObservableObject {
         if loading { return 0 }
         loading = true
         let list = sources.filter(\.enabled)
-        var fetched: [FeedItem] = []
-        var errors: [String] = []
-        var failed = Set<UUID>()
-        await withTaskGroup(of: (FeedSource, Result<[FeedItem], Error>).self) { g in
-            for s in list { g.addTask { (s, await Self.fetch(s)) } }
-            for await (s, r) in g {
-                switch r {
-                case .success(let its): fetched += its
-                case .failure(let e): errors.append("\(s.name)：\(e.localizedDescription)"); failed.insert(s.id)
+        let cached = Set(items.compactMap(\.sourceID))
+        let h0 = health
+        var results: [(FeedSource, FetchResult)] = []
+        // At most 6 feeds in flight; conditional GET when we already hold that feed's items.
+        await withTaskGroup(of: (FeedSource, FetchResult).self) { g in
+            var idx = 0
+            while idx < min(6, list.count) {
+                let s = list[idx]; idx += 1
+                let e = cached.contains(s.id) ? h0[s.id] : nil
+                g.addTask { (s, await Self.fetch(s, etag: e?.etag, lastModified: e?.lastModified)) }
+            }
+            while let r = await g.next() {
+                results.append(r)
+                if idx < list.count {
+                    let s = list[idx]; idx += 1
+                    let e = cached.contains(s.id) ? h0[s.id] : nil
+                    g.addTask { (s, await Self.fetch(s, etag: e?.etag, lastModified: e?.lastModified)) }
                 }
             }
         }
-        let old = Set(items.map(\.id))
-        let kept = items.filter { i in i.sourceID.map { failed.contains($0) } ?? false }
+        var h = health
+        var fresh: [FeedItem] = []
+        var errors: [String] = []
+        let now = Date()
+        for (s, r) in results {
+            var x = h[s.id] ?? SourceHealth()
+            x.lastAttempt = now
+            switch r {
+            case .items(let its, let et, let lm):
+                fresh += its
+                x.etag = et; x.lastModified = lm; x.lastSuccess = now; x.error = nil
+                if let n = its.compactMap(\.date).max() { x.newest = n }
+                x.count = its.count
+            case .notModified:
+                x.lastSuccess = now; x.error = nil
+            case .failed(let m):
+                x.error = m
+                errors.append("\(s.name)：\(m)")
+            }
+            h[s.id] = x
+        }
+        health = h
+        var oldSeen: [String: Date] = [:]
+        for i in items { oldSeen[i.id] = i.firstSeen ?? i.date ?? now }
+        let old = Set(oldSeen.keys)
         var seen = Set<String>()
         var merged: [FeedItem] = []
-        for i in (fetched + kept).sorted(by: Self.newest) where seen.insert(i.id).inserted { merged.append(i) }
+        for var i in fresh + items {
+            let id = i.id
+            guard seen.insert(id).inserted else { continue }
+            i.firstSeen = oldSeen[id] ?? now
+            merged.append(i)
+        }
+        merged.sort(by: Self.newest)
+        merged = pruned(merged)
         let newOnes = merged.filter { !old.contains($0.id) && !readIDs.contains($0.id) && !isMuted($0) }
         items = merged
         persist(items, "itemCache")
+        let alive = Set(merged.map(\.id)).union(saved.keys)
+        let r = readIDs.intersection(alive)
+        if r.count != readIDs.count { readIDs = r }
         lastError = errors.isEmpty ? nil : errors.joined(separator: "\n")
-        lastRefresh = Date()
+        lastRefresh = now
         loading = false
         updateBadge()
         applyDemoState()
@@ -181,15 +278,24 @@ final class FeedStore: ObservableObject {
         return newOnes.count
     }
 
-    nonisolated static func fetch(_ s: FeedSource) async -> Result<[FeedItem], Error> {
-        guard let u = URL(string: s.url) else { return .failure(URLError(.badURL)) }
+    enum FetchResult { case items([FeedItem], String?, String?), notModified, failed(String) }
+
+    nonisolated static func fetch(_ s: FeedSource, etag: String? = nil, lastModified: String? = nil) async -> FetchResult {
+        guard let u = URL(string: s.url) else { return .failed("地址无效") }
         var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue("HarkRSS/2.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        req.setValue("HarkRSS/2.3 (iOS)", forHTTPHeaderField: "User-Agent")
+        if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        if let lastModified { req.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         do {
-            let (data, _) = try await URLSession.shared.data(for: req)
-            return .success(FeedParser.parse(data, source: s).1)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let http = resp as? HTTPURLResponse
+            if http?.statusCode == 304 { return .notModified }
+            if let c = http?.statusCode, c >= 400 { return .failed("服务器返回 \(c)") }
+            let its = FeedParser.parse(data, source: s).1
+            if its.isEmpty && FeedDiscovery.looksLikeFeed(data, url: s.url) == nil { return .failed("不是有效的订阅源") }
+            return .items(its, http?.value(forHTTPHeaderField: "ETag"), http?.value(forHTTPHeaderField: "Last-Modified"))
         } catch {
-            return .failure(error)
+            return .failed(error.localizedDescription)
         }
     }
 

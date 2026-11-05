@@ -73,11 +73,30 @@ struct SourcesView: View {
         }
     }
 
+    @ViewBuilder
+    private func healthLine(_ s: FeedSource) -> some View {
+        let h = store.health[s.id]
+        switch h?.state ?? .unknown {
+        case .failing:
+            Label("拉取失败：\(h?.error ?? "")", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.red).lineLimit(1)
+        case .stale:
+            Label("超过 30 天没有新文章", systemImage: "moon.zzz.fill")
+                .font(.caption).foregroundStyle(.orange).lineLimit(1)
+        case .ok:
+            let when = h?.newest.map { "最新文章 " + $0.formatted(.relative(presentation: .named)) } ?? "正常"
+            Label(when, systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green).lineLimit(1)
+        case .unknown:
+            Text(s.url).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
     private func row(_ s: FeedSource) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(s.name).foregroundStyle(s.enabled ? .primary : .secondary)
-                Text(s.url).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                healthLine(s)
             }
             Spacer()
             let n = store.unreadCount(for: s)
@@ -98,6 +117,8 @@ struct AddSourceView: View {
     @State private var candidates: [FeedDiscovery.Candidate] = []
     @State private var searching = false
     @State private var errorText: String?
+    @State private var template = RSSHub.templates[0]
+    @State private var templateID = ""
 
     var body: some View {
         NavigationStack {
@@ -109,7 +130,7 @@ struct AddSourceView: View {
                         .autocorrectionDisabled()
                     TextField("分组（可选）", text: $group)
                 } footer: {
-                    Text("输入网站地址会自动寻找它的 RSS，比如 sspai.com，或 YouTube 频道页。")
+                    Text("输入网站地址会自动寻找它的 RSS，比如 sspai.com、YouTube 频道页。也可以直接粘贴微博、B站、知乎、小红书、抖音的主页链接，会自动转成 RSSHub 订阅。")
                 }
                 if !store.groups.isEmpty {
                     Section("已有分组") {
@@ -130,6 +151,35 @@ struct AddSourceView: View {
                 }
                 if let errorText {
                     Section { Text(errorText).foregroundStyle(.red) }
+                }
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        GlassGroup(spacing: 8) {
+                            HStack(spacing: 8) {
+                                ForEach(RSSHub.hot) { h in
+                                    Button { addHot(h) } label: {
+                                        Label(h.name, systemImage: h.icon).font(.subheadline.weight(.medium))
+                                            .padding(.horizontal, 12).padding(.vertical, 8)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .glass(in: Capsule(), interactive: true)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    Picker("类型", selection: $template) {
+                        ForEach(RSSHub.templates) { t in Label(t.name, systemImage: t.icon).tag(t) }
+                    }
+                    TextField(template.prompt, text: $templateID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("添加这个订阅") { addTemplate() }
+                        .disabled(templateID.trimmingCharacters(in: .whitespaces).isEmpty)
+                } header: {
+                    Text("RSSHub 快捷订阅")
+                } footer: {
+                    Text("热门榜单点一下就能订阅。当前实例：\(RSSHub.instance)，公共实例有时会限流，可以在「设置」里换成自建的实例。")
                 }
                 if !candidates.isEmpty {
                     Section("找到的订阅源，点一下添加") {
@@ -154,6 +204,12 @@ struct AddSourceView: View {
         searching = true
         errorText = nil
         candidates = []
+        if let r = RSSHub.route(fromURL: input) {
+            candidates = [FeedDiscovery.Candidate(title: r.name, url: r.url)]
+            if group.isEmpty { group = r.group }
+            searching = false
+            return
+        }
         do {
             candidates = try await FeedDiscovery.discover(input)
             if candidates.isEmpty { errorText = "没找到 RSS，可以直接粘贴 RSS 地址再试。" }
@@ -161,6 +217,19 @@ struct AddSourceView: View {
             errorText = error.localizedDescription
         }
         searching = false
+    }
+
+    private func addHot(_ h: RSSHub.Hot) {
+        store.addSource(name: h.name, url: RSSHub.url(h.path), group: group.isEmpty ? "热榜" : group)
+        dismiss()
+        Task { await store.refresh() }
+    }
+    private func addTemplate() {
+        let id = templateID.trimmingCharacters(in: .whitespaces)
+        let url = RSSHub.url(template.path.replacingOccurrences(of: "{id}", with: id))
+        store.addSource(name: "\(template.name) \(id)", url: url, group: group.isEmpty ? template.group : group)
+        dismiss()
+        Task { await store.refresh() }
     }
 
     private func add(_ c: FeedDiscovery.Candidate) {
