@@ -56,6 +56,8 @@ struct ExpandableTabBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 2)
+        // Large text sizes must not push the bar wider than the screen.
+        .dynamicTypeSize(...DynamicTypeSize.large)
         .animation(.spring(response: 0.45, dampingFraction: 0.78), value: state.collapsed)
         .animation(.spring(response: 0.42, dampingFraction: 0.8), value: state.actionsOpen)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: selection)
@@ -90,8 +92,19 @@ struct ExpandableTabBar: View {
                     .font(.system(size: 17, weight: on ? .semibold : .regular))
                     .symbolRenderingMode(.hierarchical)
                     .overlay(alignment: .topTrailing) {
-                        if t == .timeline && unread > 0 && !on {
-                            Circle().fill(.red).frame(width: 8, height: 8).offset(x: 4, y: -2)
+                        // The unread count rides on the icon so it never widens the bar.
+                        if t == .timeline && unread > 0 {
+                            if on {
+                                Text(unread > 999 ? "999+" : "\(unread)")
+                                    .font(.system(size: 9, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Capsule().fill(.red))
+                                    .fixedSize()
+                                    .offset(x: 12, y: -9)
+                            } else {
+                                Circle().fill(.red).frame(width: 8, height: 8).offset(x: 4, y: -2)
+                            }
                         }
                     }
                 if on {
@@ -99,19 +112,10 @@ struct ExpandableTabBar: View {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1).fixedSize()
                         .transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .leading)))
-                    if t == .timeline && unread > 0 {
-                        Text(unread > 999 ? "999+" : "\(unread)")
-                            .font(.caption2.weight(.bold)).monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(.red))
-                            .fixedSize()
-                            .transition(.opacity)
-                    }
                 }
             }
             .foregroundStyle(on ? t.tint : Color.primary.opacity(0.72))
-            .padding(.horizontal, on ? 14 : 12)
+            .padding(.horizontal, on ? 14 : 10)
             .frame(height: 46)
             .background {
                 if on {
