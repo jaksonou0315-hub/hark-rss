@@ -132,7 +132,7 @@ struct ArticleView: View {
                     }
                     .glassButton(prominent: true)
                 }
-                HStack(spacing: 20) {
+                HStack(spacing: 12) {
                     barButton(store.isStarred(item) ? "star.fill" : "star") { store.toggleStar(item) }
                     barButton(store.isLater(item) ? "clock.fill" : "clock") { store.toggleLater(item) }
                     if canTranslate {
@@ -158,13 +158,14 @@ struct ArticleView: View {
                             Button { openURL(u) } label: { Label("在浏览器打开", systemImage: "safari") }
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle").font(.title3).frame(width: 26, height: 26)
+                        Image(systemName: "ellipsis.circle").font(.title3).frame(width: 34, height: 34)
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 22)
-                .padding(.vertical, 13)
-                .glass(in: Capsule(), interactive: true)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                // Not interactive: an interactive glass shape around several buttons swallows their taps on iOS 26.
+                .glass(in: Capsule())
             }
         }
         .padding(.bottom, 10)
@@ -219,9 +220,12 @@ struct ArticleView: View {
     }
 
     private func barButton(_ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: icon).font(.title3) }
-            .buttonStyle(.plain)
-            .frame(width: 26, height: 26)
+        Button(action: action) {
+            Image(systemName: icon).font(.title3)
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var speakIcon: String {

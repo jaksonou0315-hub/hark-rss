@@ -77,8 +77,9 @@ struct MiniPlayerBar: View {
                     Button { sp.stop() } label: { Image(systemName: "xmark").font(.caption.bold()) }
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .padding(.horizontal, 18).padding(.vertical, 12)
-                .glass(in: Capsule(), interactive: true)
+                .glass(in: Capsule())
             }
         } else if let item = p.current {
             GlassGroup(spacing: 8) {
@@ -96,8 +97,9 @@ struct MiniPlayerBar: View {
                     Button { p.stop() } label: { Image(systemName: "xmark").font(.caption.bold()) }
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .padding(.horizontal, 18).padding(.vertical, 12)
-                .glass(in: Capsule(), interactive: true)
+                .glass(in: Capsule())
             }
         }
     }
