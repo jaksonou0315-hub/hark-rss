@@ -66,8 +66,12 @@ struct MiniPlayerBar: View {
         if let item = sp.item {
             GlassGroup(spacing: 8) {
                 HStack(spacing: 14) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.title3).symbolRenderingMode(.hierarchical)
+                    if sp.loading {
+                        ProgressView().frame(width: 24)
+                    } else {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.title3).symbolRenderingMode(.hierarchical)
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         ProgressView(value: sp.progress)

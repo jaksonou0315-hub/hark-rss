@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 enum ReaderTheme: String, CaseIterable, Identifiable {
     case auto, paper, night
@@ -67,6 +68,12 @@ struct ReaderSettingsForm: View {
     @AppStorage("readerSerif") private var serif = false
     @AppStorage("readerTheme") private var theme = ReaderTheme.auto.rawValue
     @AppStorage("speechRate") private var speechRate = 0.5
+    @AppStorage("speechEngine") private var speechEngine = "edge"
+    @AppStorage("edgeVoice") private var edgeVoice = EdgeTTS.defaultVoice
+    @AppStorage("edgePitch") private var edgePitch = 0
+    @AppStorage("systemVoice") private var systemVoice = ""
+    @State private var previewing = false
+    @State private var previewFailed = false
     @AppStorage("compactList") private var compact = false
     @AppStorage("groupByDay") private var groupByDay = true
     @AppStorage("autoFullText") private var autoFullText = true
@@ -94,12 +101,48 @@ struct ReaderSettingsForm: View {
                 Text("文章")
             }
             Section {
+                Picker("朗读引擎", selection: $speechEngine) {
+                    Text("自然语音").tag("edge"); Text("系统语音").tag("system")
+                }
+                .pickerStyle(.segmented)
+                if speechEngine == "edge" {
+                    Picker("声音", selection: $edgeVoice) {
+                        ForEach(EdgeTTS.voices) { v in Text("\(v.name) · \(v.desc)").tag(v.id) }
+                    }
+                    Picker("音调", selection: $edgePitch) {
+                        Text("低沉").tag(-10); Text("自然").tag(0); Text("明亮").tag(10)
+                    }
+                    .pickerStyle(.segmented)
+                    Button {
+                        previewing = true
+                        Task {
+                            previewFailed = !(await Speaker.shared.preview(voice: edgeVoice))
+                            previewing = false
+                        }
+                    } label: {
+                        HStack {
+                            Label("试听", systemImage: "play.circle")
+                            if previewing { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(previewing)
+                    if previewFailed {
+                        Text("连不上在线语音，朗读时会自动改用系统语音。").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Picker("声音", selection: $systemVoice) {
+                        Text("自动").tag("")
+                        ForEach(SystemVoices.chinese, id: \.identifier) { v in Text(SystemVoices.label(v)).tag(v.identifier) }
+                    }
+                }
                 Picker("朗读速度", selection: $speechRate) {
                     Text("慢").tag(0.42); Text("标准").tag(0.5); Text("快").tag(0.56)
                 }
                 .pickerStyle(.segmented)
             } header: {
-                Text("朗读速度")
+                Text("朗读")
+            } footer: {
+                Text(speechEngine == "edge" ? "自然语音来自微软在线服务，需要联网；其他语言的文章会自动换成同性别的对应声音。" : "更好听的系统声音可在「设置 > 辅助功能 > 朗读内容 > 声音」下载增强版或高级版。")
             }
             Section {
                 Toggle("按日期分组", isOn: $groupByDay)
@@ -126,5 +169,20 @@ struct ReaderSettingsSheet: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+enum SystemVoices {
+    static var chinese: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("zh") }
+            .sorted { ($0.quality.rawValue, $0.name) > ($1.quality.rawValue, $1.name) }
+    }
+    static func label(_ v: AVSpeechSynthesisVoice) -> String {
+        let g: String
+        switch v.gender { case .male: g = "男"; case .female: g = "女"; default: g = "" }
+        let q: String
+        switch v.quality { case .premium: q = " · 高级"; case .enhanced: q = " · 增强"; default: q = "" }
+        let region = v.language == "zh-CN" ? "" : (v.language == "zh-HK" ? " · 粤语" : " · 台湾")
+        return "\(v.name)\(g.isEmpty ? "" : " · " + g)\(region)\(q)"
     }
 }

@@ -24,6 +24,21 @@ jobs:
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate
+      - name: Check online voice token
+        run: |
+          mkdir -p /tmp/gec && cp App/EdgeTTS.swift /tmp/gec/
+          cat > /tmp/gec/main.swift <<'SW'
+          import Foundation
+          let t = EdgeGEC.token(unix: 1762487000)
+          print("GEC=\(t)")
+          guard t == "C2E5839FF8AE0608-525FFE430A020CB56BEE4BBC2F9E34EFE2769FC5234B205A798240D3AF82DCCA" else { print("GEC MISMATCH"); exit(1) }
+          do {
+              let d = try await EdgeTTS.synthesize("你好，这是测试。", voice: "zh-CN-XiaoxiaoNeural", rate: 0, pitch: 0)
+              print("EDGE_OK bytes=\(d.count)")
+          } catch { print("EDGE_FAIL \(error)") }
+          SW
+          swiftc -o /tmp/gec/gec /tmp/gec/*.swift
+          /tmp/gec/gec
       - name: Build
         run: |
           set -o pipefail
