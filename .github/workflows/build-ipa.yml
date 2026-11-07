@@ -45,6 +45,11 @@ jobs:
         with:
           name: HarkRSS-unsigned-ipa
           path: HarkRSS-unsigned.ipa
+      - name: Private download link
+        # Unlisted 72-hour link so a test build can be handed over without touching the release page.
+        run: |
+          URL=$(curl -s --retry 3 -F reqtype=fileupload -F time=72h -F fileToUpload=@HarkRSS-unsigned.ipa https://litterbox.catbox.moe/resources/internals/api.php || true)
+          echo "DIRECT_URL=$URL"
       - name: Publish release
         # Only when started by hand with publish ticked; pushes just build an artifact.
         if: github.event_name == 'workflow_dispatch' && inputs.publish
