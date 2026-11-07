@@ -86,6 +86,12 @@ struct ItemsScreen: View {
                         .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous), tint: .red.opacity(0.2))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                        // Swipe right to dismiss; it comes back only if a later refresh fails again.
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                withAnimation { store.lastError = nil }
+                            } label: { Label("删除", systemImage: "trash") }
+                        }
                 }
                 if items.isEmpty {
                     EmptyHint(mode: mode, searching: !search.isEmpty)
