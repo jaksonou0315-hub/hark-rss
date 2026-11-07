@@ -78,7 +78,7 @@ struct SettingsView: View {
             } header: {
                 Text("RSSHub 实例")
             } footer: {
-                Text("留空就用公共实例 rsshub.app。已添加的订阅地址不会自动跟着改。")
+                Text("留空会自动在几个公共镜像间切换，哪个能用就用哪个。填了自建实例后，所有 RSSHub 订阅都走你的实例。微博需要自建实例并配置 Cookie。")
             }
 
             Section("数据") {

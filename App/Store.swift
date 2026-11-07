@@ -302,9 +302,27 @@ final class FeedStore: ObservableObject {
     enum FetchResult { case items([FeedItem], String?, String?), notModified, failed(String) }
 
     nonisolated static func fetch(_ s: FeedSource, etag: String? = nil, lastModified: String? = nil) async -> FetchResult {
-        guard let u = URL(string: s.url) else { return .failed("地址无效") }
-        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue("HarkRSS/2.4 (iOS)", forHTTPHeaderField: "User-Agent")
+        let urls = RSSHub.candidates(for: s.url)
+        var first: FetchResult?
+        for (n, raw) in urls.enumerated() {
+            // Conditional headers only make sense against the server that issued them.
+            let r = await fetchOnce(raw, source: s, etag: n == 0 ? etag : nil, lastModified: n == 0 ? lastModified : nil)
+            if case .failed = r {
+                if first == nil { first = r }
+                continue
+            }
+            if urls.count > 1 { RSSHub.remember(working: raw) }
+            return r
+        }
+        if let h = RSSHub.hint(for: s.url) { return .failed(h) }
+        if urls.count > 1, case .failed(let m)? = first { return .failed("所有 RSSHub 实例都失败了（\(m)）") }
+        return first ?? .failed("地址无效")
+    }
+
+    nonisolated private static func fetchOnce(_ raw: String, source s: FeedSource, etag: String?, lastModified: String?) async -> FetchResult {
+        guard let u = URL(string: raw) else { return .failed("地址无效") }
+        var req = URLRequest(url: u, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1 HarkRSS/2.5", forHTTPHeaderField: "User-Agent")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         if let lastModified { req.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
         do {
@@ -313,7 +331,7 @@ final class FeedStore: ObservableObject {
             if http?.statusCode == 304 { return .notModified }
             if let c = http?.statusCode, c >= 400 { return .failed("服务器返回 \(c)") }
             let its = FeedParser.parse(data, source: s).1
-            if its.isEmpty && FeedDiscovery.looksLikeFeed(data, url: s.url) == nil { return .failed("不是有效的订阅源") }
+            if its.isEmpty && FeedDiscovery.looksLikeFeed(data, url: raw) == nil { return .failed("不是有效的订阅源") }
             return .items(its, http?.value(forHTTPHeaderField: "ETag"), http?.value(forHTTPHeaderField: "Last-Modified"))
         } catch {
             return .failed(error.localizedDescription)

@@ -2,15 +2,66 @@ import Foundation
 
 /// RSSHub turns sites without RSS (微博, B站, 知乎, 小红书, 抖音 …) into feeds.
 enum RSSHub {
-    static let defaultInstance = "https://rsshub.app"
+    /// rsshub.app now refuses feed readers (403), so the default is a community mirror,
+    /// and a failing RSSHub feed is retried on the other mirrors automatically.
+    static let mirrors = [
+        "https://rsshub.rssforever.com",
+        "https://rsshub.ktachibana.party",
+        "https://rsshub.umzzz.com",
+        "https://rsshub.isrss.com",
+        "https://rsshub.liumingye.cn",
+        "https://hub.slarker.me",
+    ]
+    static let defaultInstance = mirrors[0]
+    /// Hosts treated as RSSHub, so an old rsshub.app subscription is moved to a working mirror.
+    static let knownHosts: Set<String> = Set(mirrors.compactMap { URL(string: $0)?.host } + ["rsshub.app", "rsshub.woodland.cafe", "rsshub.atgw.io"])
+
+    static var custom: String? {
+        let s = UserDefaults.standard.string(forKey: "rsshubInstance")?.trimmingCharacters(in: .whitespaces) ?? ""
+        if s.isEmpty { return nil }
+        return s.hasSuffix("/") ? String(s.dropLast()) : s
+    }
     static var instance: String {
-        get {
-            let s = UserDefaults.standard.string(forKey: "rsshubInstance")?.trimmingCharacters(in: .whitespaces) ?? ""
-            return s.isEmpty ? defaultInstance : (s.hasSuffix("/") ? String(s.dropLast()) : s)
-        }
+        get { custom ?? (UserDefaults.standard.string(forKey: "rsshubWorking") ?? defaultInstance) }
         set { UserDefaults.standard.set(newValue, forKey: "rsshubInstance") }
     }
     static func url(_ path: String) -> String { instance + path }
+
+    /// If `raw` is an RSSHub address, the route path with its query ("/weibo/user/1?limit=20").
+    static func path(of raw: String) -> String? {
+        guard let c = URLComponents(string: raw), let host = c.host?.lowercased() else { return nil }
+        var hosts = knownHosts
+        if let cu = custom, let h = URL(string: cu)?.host?.lowercased() { hosts.insert(h) }
+        guard hosts.contains(host) else { return nil }
+        var p = c.percentEncodedPath
+        if let q = c.percentEncodedQuery { p += "?" + q }
+        return p.isEmpty ? nil : p
+    }
+
+    /// Instances to try for a route, best first: the user's own, the last one that worked, then the mirrors.
+    static func candidates(for raw: String) -> [String] {
+        guard let p = path(of: raw) else { return [raw] }
+        var bases: [String] = []
+        if let cu = custom { bases.append(cu) }
+        if let w = UserDefaults.standard.string(forKey: "rsshubWorking") { bases.append(w) }
+        bases += mirrors
+        var seen = Set<String>()
+        return bases.filter { seen.insert($0).inserted }.map { $0 + p }
+    }
+
+    static func remember(working url: String) {
+        guard custom == nil, path(of: url) != nil, let c = URLComponents(string: url),
+              let scheme = c.scheme, let host = c.host else { return }
+        UserDefaults.standard.set("\(scheme)://\(host)", forKey: "rsshubWorking")
+    }
+
+    /// Plain-language reason for routes the public mirrors cannot serve.
+    static func hint(for raw: String) -> String? {
+        guard let p = path(of: raw) else { return nil }
+        if p.hasPrefix("/weibo") { return "公共 RSSHub 实例暂时拉不到微博（微博要登录 Cookie），需要自建实例" }
+        if p.hasPrefix("/xiaohongshu") || p.hasPrefix("/douyin") { return "公共 RSSHub 实例经常拉不到这个站，建议自建实例" }
+        return nil
+    }
 
     struct Template: Identifiable, Hashable {
         var id: String { path }
