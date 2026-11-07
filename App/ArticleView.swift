@@ -22,6 +22,7 @@ struct ArticleView: View {
     @State private var summaryFailed = false
     @ObservedObject private var speaker = Speaker.shared
     @AppStorage("readerSize") private var readerSize = 2
+    @AppStorage("autoFullText") private var autoFullText = true
     @AppStorage("readerSpacing") private var readerSpacing = 6.0
     @AppStorage("readerSerif") private var readerSerif = false
     @AppStorage("readerTheme") private var readerThemeRaw = ReaderTheme.auto.rawValue
@@ -32,7 +33,17 @@ struct ArticleView: View {
     private var showingTranslation: Bool { translateOn && translated != nil }
     @Environment(\.openURL) private var openURL
 
-    private var bodyHTML: String { fullText ?? (item.content.isEmpty ? item.summary : item.content) }
+    private var originalHTML: String { item.content.isEmpty ? item.summary : item.content }
+    private var bodyHTML: String { fullText ?? originalHTML }
+
+    /// Feeds that only carry a teaser get the whole article fetched on open.
+    /// Video posts (B站 etc.) keep their own content, since their page has no article to extract.
+    private var wantsAutoFull: Bool {
+        guard autoFullText, fullText == nil, link != nil, !item.isVideo else { return false }
+        let lower = originalHTML.lowercased()
+        if lower.contains("<video") || lower.contains("<iframe") || lower.contains("<embed") { return false }
+        return originalHTML.strippingHTML.count < 600
+    }
     private var link: URL? { item.link.isEmpty ? nil : URL(string: item.link) }
 
     var body: some View {
@@ -64,10 +75,22 @@ struct ArticleView: View {
             TabBarState.shared.hidden = true
             store.markRead(item)
             if let c = store.fullText[item.id] { fullText = c }
+            else if wantsAutoFull { Task { await loadFull(silent: true) } }
         }
         .task(id: bodyHTML) {
-            let html = bodyHTML, base = link
-            blocks = await Task.detached(priority: .userInitiated) { HTMLParser.parse(html, base: base) }.value
+            let html = bodyHTML, base = link, original = originalHTML, isFull = fullText != nil
+            var parsed = await Task.detached(priority: .userInitiated) { HTMLParser.parse(html, base: base) }.value
+            if isFull {
+                // Keep the feed's own videos when the fetched page dropped them.
+                let own = await Task.detached(priority: .userInitiated) { HTMLParser.parse(original, base: base) }.value
+                let have = Set(parsed.filter(\.isPlayable).map(\.id))
+                let missing = own.filter { $0.isPlayable && !have.contains($0.id) }
+                parsed = missing + parsed
+            }
+            if item.isVideo, let u = URL(string: item.enclosureURL), !parsed.contains(where: { $0.id == "v\(u.absoluteString)" }) {
+                parsed.insert(.video(u, item.imageURL.isEmpty ? nil : URL(string: item.imageURL)), at: 0)
+            }
+            blocks = parsed
             translated = nil; translatedTitle = nil
             if translateOn { translateOn = false }
             let sample = ([item.title] + blocks.compactMap(\.plainText)).joined(separator: " ")
@@ -223,13 +246,22 @@ struct ArticleView: View {
 
     private func toggleFull() async {
         if fullText != nil { fullText = nil; return }
+        await loadFull(silent: false)
+    }
+
+    /// Fetches the full article. Silent loads (on open) fail quietly and keep the feed's text.
+    private func loadFull(silent: Bool) async {
+        guard !loadingFull else { return }
         loadingFull = true
         do {
             let t = try await FullText.extract(from: item.link)
-            store.fullText[item.id] = t
-            fullText = t
+            // Only swap in what is actually longer than the teaser.
+            if !silent || t.strippingHTML.count > originalHTML.strippingHTML.count + 80 {
+                store.fullText[item.id] = t
+                fullText = t
+            }
         } catch {
-            fullError = true
+            if !silent { fullError = true }
         }
         loadingFull = false
     }

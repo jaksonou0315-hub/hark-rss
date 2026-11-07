@@ -69,6 +69,7 @@ struct ReaderSettingsForm: View {
     @AppStorage("speechRate") private var speechRate = 0.5
     @AppStorage("compactList") private var compact = false
     @AppStorage("groupByDay") private var groupByDay = true
+    @AppStorage("autoFullText") private var autoFullText = true
 
     var body: some View {
         Form {
@@ -84,6 +85,7 @@ struct ReaderSettingsForm: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("衬线字体", isOn: $serif)
+                Toggle("打开时自动显示全文", isOn: $autoFullText)
                 Picker("主题", selection: $theme) {
                     ForEach(ReaderTheme.allCases) { Text($0.label).tag($0.rawValue) }
                 }

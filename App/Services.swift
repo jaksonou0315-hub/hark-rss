@@ -64,8 +64,11 @@ enum FullText {
             html = html.replacingOccurrences(of: "<\(tag)[\\s\\S]*?</\(tag)>", with: "", options: [.regularExpression, .caseInsensitive])
         }
         let body = firstMatch("<article[\\s\\S]*?</article>", in: html) ?? firstMatch("<main[\\s\\S]*?</main>", in: html) ?? html
-        let parts = allMatches("<(p|h2|h3|h4|blockquote|pre|figure|ul|ol)[\\s>][\\s\\S]*?</\\1>", in: body)
-        let result = parts.filter { $0.strippingHTML.count > 15 || $0.lowercased().contains("<img") }.joined(separator: "\n")
+        let parts = allMatches("<(p|h2|h3|h4|blockquote|pre|figure|ul|ol|video|iframe)[\\s>][\\s\\S]*?</\\1>", in: body)
+        let result = parts.filter {
+            let l = $0.lowercased()
+            return $0.strippingHTML.count > 15 || l.contains("<img") || l.contains("<video") || l.contains("<iframe")
+        }.joined(separator: "\n")
         guard !result.isEmpty else { throw URLError(.cannotParseResponse) }
         return result
     }

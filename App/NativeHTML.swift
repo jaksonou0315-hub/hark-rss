@@ -1,4 +1,6 @@
 import SwiftUI
+import AVKit
+import WebKit
 
 /// A small HTML → SwiftUI renderer for feed content. No WebKit.
 enum HTMLBlock: Identifiable {
@@ -9,6 +11,8 @@ enum HTMLBlock: Identifiable {
     case bullet(String, AttributedString)
     case image(URL)
     case media(URL, String)
+    case video(URL, URL?)        // direct video file, optional poster
+    case embed(URL)              // web player (B站, YouTube …)
     case rule
 
     var id: String {
@@ -20,6 +24,8 @@ enum HTMLBlock: Identifiable {
         case .bullet(let m, let t): return "b\(m)\(String(t.characters.prefix(40)))"
         case .image(let u): return "i\(u.absoluteString)"
         case .media(let u, _): return "m\(u.absoluteString)"
+        case .video(let u, _): return "v\(u.absoluteString)"
+        case .embed(let u): return "e\(u.absoluteString)"
         case .rule: return "r\(UUID().uuidString)"
         }
     }
@@ -58,6 +64,9 @@ enum HTMLParser {
         var listStack: [(ordered: Bool, n: Int)] = []
         var bulletMark: String?
         var preText = ""
+        var inVideo = false, videoDone = false
+        var videoPoster: URL?
+        var inAudio = false
 
         func resolve(_ s: String) -> URL? {
             let s = decode(s).trimmingCharacters(in: .whitespaces)
@@ -163,22 +172,77 @@ enum HTMLParser {
                 if !closing, let u = (attr(attrs, "data-src") ?? attr(attrs, "src")).flatMap(resolve) {
                     flush(); blocks.append(.image(u))
                 }
-            case "video", "audio", "iframe", "source", "embed":
-                if !closing, let u = attr(attrs, "src").flatMap(resolve) {
-                    flush(); blocks.append(.media(u, tag == "audio" ? "播放音频" : "播放视频"))
+            case "video":
+                if closing { inVideo = false; videoPoster = nil; continue }
+                videoPoster = attr(attrs, "poster").flatMap(resolve)
+                if let u = attr(attrs, "src").flatMap(resolve) {
+                    flush(); blocks.append(.video(u, videoPoster)); videoDone = true
+                } else { videoDone = false }
+                inVideo = !attrs.hasSuffix("/")
+            case "audio":
+                if closing { inAudio = false; continue }
+                inAudio = true
+                if let u = attr(attrs, "src").flatMap(resolve) { flush(); blocks.append(.media(u, "播放音频")) }
+            case "source":
+                guard !closing, let u = attr(attrs, "src").flatMap(resolve) else { continue }
+                if inVideo { if !videoDone { flush(); blocks.append(.video(u, videoPoster)); videoDone = true } }
+                else if inAudio { flush(); blocks.append(.media(u, "播放音频")) }
+            case "iframe", "embed":
+                if !closing, let u = (attr(attrs, "src") ?? attr(attrs, "data-src")).flatMap(resolve), let b = mediaBlock(u) {
+                    flush(); blocks.append(b)
                 }
             default:
                 if blockTags.contains(tag) { let keep = bulletMark; flush(); if !closing { bulletMark = keep } }
             }
         }
         flush()
-        // Drop duplicate consecutive images
+        // Drop duplicate images and players
         var out: [HTMLBlock] = []
+        var seenMedia = Set<String>()
         for b in blocks {
             if case .image(let u) = b, case .image(let p)? = out.last, p == u { continue }
+            if b.isPlayable, !seenMedia.insert(b.id).inserted { continue }
             out.append(b)
         }
         return out
+    }
+
+    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov", "m3u8", "webm"]
+
+    /// A player block for an iframe/embed address, or nil for ads, trackers and non-web links.
+    static func mediaBlock(_ u: URL) -> HTMLBlock? {
+        guard let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        if videoExtensions.contains(u.pathExtension.lowercased()) { return .video(u, nil) }
+        return .embed(normalizedEmbed(u))
+    }
+
+    /// Mobile-friendly player pages; B站 embeds otherwise autoplay or show the desktop player.
+    static func normalizedEmbed(_ u: URL) -> URL {
+        var c = URLComponents(url: u, resolvingAgainstBaseURL: false) ?? URLComponents()
+        c.scheme = "https"
+        let host = (c.host ?? "").lowercased()
+        let q = c.queryItems ?? []
+        if host.contains("bilibili.com") {
+            let bvid = q.first { $0.name.lowercased() == "bvid" }?.value
+            let aid = q.first { $0.name.lowercased() == "aid" }?.value
+            let page = q.first { $0.name.lowercased() == "page" || $0.name.lowercased() == "p" }?.value
+            if bvid != nil || aid != nil {
+                var n = URLComponents(string: "https://player.bilibili.com/player.html")!
+                var items: [URLQueryItem] = []
+                if let bvid { items.append(.init(name: "bvid", value: bvid)) }
+                if let aid { items.append(.init(name: "aid", value: aid)) }
+                if let page { items.append(.init(name: "page", value: page)) }
+                items += [.init(name: "autoplay", value: "0"), .init(name: "high_quality", value: "1"), .init(name: "danmaku", value: "0")]
+                n.queryItems = items
+                return n.url ?? u
+            }
+        }
+        if host.contains("youtube.com") || host.contains("youtube-nocookie.com") {
+            var items = q.filter { $0.name != "autoplay" }
+            items.append(.init(name: "playsinline", value: "1"))
+            c.queryItems = items
+        }
+        return c.url ?? u
     }
 }
 
@@ -252,8 +316,137 @@ struct HTMLContentView: View {
             }
             .buttonStyle(.plain)
             .glass(in: Capsule(), interactive: true)
+        case .video(let u, let poster):
+            InlineVideo(url: u, poster: poster)
+        case .embed(let u):
+            InlineEmbed(url: u)
         case .rule:
             Divider().padding(.vertical, 4)
         }
+    }
+}
+
+extension HTMLBlock {
+    var isPlayable: Bool {
+        switch self {
+        case .video, .embed, .media: return true
+        default: return false
+        }
+    }
+}
+
+/// A video file played right inside the article. The player is only created on tap.
+struct InlineVideo: View {
+    let url: URL
+    var poster: URL?
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        ZStack {
+            if let player {
+                VideoPlayer(player: player)
+            } else {
+                Button {
+                    if Speaker.shared.isActive { Speaker.shared.stop() }
+                    Player.shared.pause()
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    let p = AVPlayer(url: url)
+                    player = p
+                    p.play()
+                } label: {
+                    ZStack {
+                        Color.black.opacity(0.85)
+                        if let poster {
+                            AsyncImage(url: poster) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
+                        }
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 54)).symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.35))
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onDisappear { player?.pause() }
+    }
+}
+
+/// A web video player (B站, YouTube …) shown inside the article. Loads only on tap, so pages stay light.
+struct InlineEmbed: View {
+    let url: URL
+    @State private var loaded = false
+    @Environment(\.openURL) private var openURL
+
+    private var site: String {
+        let h = url.host?.lowercased() ?? ""
+        if h.contains("bilibili") { return "B站" }
+        if h.contains("youtube") { return "YouTube" }
+        if h.contains("qq.com") { return "腾讯视频" }
+        if h.contains("youku") { return "优酷" }
+        if h.contains("douyin") { return "抖音" }
+        return h.replacingOccurrences(of: "www.", with: "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Group {
+                if loaded {
+                    EmbedWebView(url: url)
+                } else {
+                    Button {
+                        if Speaker.shared.isActive { Speaker.shared.stop() }
+                        Player.shared.pause()
+                        loaded = true
+                    } label: {
+                        ZStack {
+                            LinearGradient(colors: [.black.opacity(0.85), .purple.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            VStack(spacing: 8) {
+                                Image(systemName: "play.circle.fill").font(.system(size: 50)).foregroundStyle(.white)
+                                Text("播放\(site)视频").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Button { openURL(url) } label: {
+                Label("播不了？在浏览器打开", systemImage: "safari").font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct EmbedWebView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> WKWebView {
+        let cfg = WKWebViewConfiguration()
+        cfg.allowsInlineMediaPlayback = true
+        cfg.mediaTypesRequiringUserActionForPlayback = []
+        let v = WKWebView(frame: .zero, configuration: cfg)
+        v.isOpaque = false
+        v.backgroundColor = .black
+        v.scrollView.isScrollEnabled = false
+        v.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        var req = URLRequest(url: url)
+        // B站 and others refuse embeds without a referer.
+        req.setValue("https://\(url.host ?? "www.bilibili.com")/", forHTTPHeaderField: "Referer")
+        v.load(req)
+        return v
+    }
+
+    func updateUIView(_ v: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ v: WKWebView, coordinator: ()) {
+        v.stopLoading()
+        v.loadHTMLString("", baseURL: nil)
     }
 }
