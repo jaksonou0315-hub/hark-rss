@@ -119,6 +119,7 @@ struct AddSourceView: View {
     @State private var errorText: String?
     @State private var template = RSSHub.templates[0]
     @State private var templateID = ""
+    @FocusState private var focused: Bool
     let initialInput: String
 
     init(initialInput: String = "") { self.initialInput = initialInput }
@@ -136,7 +137,11 @@ struct AddSourceView: View {
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($focused)
+                        .submitLabel(.search)
+                        .onSubmit { if !input.isEmpty { Task { await find() } } }
                     TextField("分组（可选）", text: $group)
+                        .focused($focused)
                 } footer: {
                     Text("输入网站地址会自动寻找它的 RSS，比如 sspai.com、YouTube 频道页。也可以直接粘贴微博、B站、知乎、小红书、抖音的主页链接，会自动转成 RSSHub 订阅。")
                 }
@@ -160,6 +165,18 @@ struct AddSourceView: View {
                 if let errorText {
                     Section { Text(errorText).foregroundStyle(.red) }
                 }
+                if !candidates.isEmpty {
+                    Section("找到的订阅源，点一下添加") {
+                        ForEach(candidates) { c in
+                            Button { add(c) } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.title)
+                                    Text(c.url).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
                 Section {
                     ScrollView(.horizontal, showsIndicators: false) {
                         GlassGroup(spacing: 8) {
@@ -182,6 +199,7 @@ struct AddSourceView: View {
                     TextField(template.prompt, text: $templateID)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($focused)
                     Button("添加这个订阅") { addTemplate() }
                         .disabled(templateID.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: {
@@ -189,19 +207,8 @@ struct AddSourceView: View {
                 } footer: {
                     Text("热门榜单点一下就能订阅。当前实例：\(RSSHub.instance)，公共实例有时会限流，可以在「设置」里换成自建的实例。")
                 }
-                if !candidates.isEmpty {
-                    Section("找到的订阅源，点一下添加") {
-                        ForEach(candidates) { c in
-                            Button { add(c) } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(c.title)
-                                    Text(c.url).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("添加订阅")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
@@ -214,6 +221,7 @@ struct AddSourceView: View {
     }
 
     private func find() async {
+        focused = false   // hide the keyboard so the results are visible; tapping a field brings it back
         searching = true
         errorText = nil
         candidates = []
