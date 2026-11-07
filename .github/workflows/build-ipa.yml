@@ -1,6 +1,11 @@
 name: Build unsigned IPA
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "发布到 release latest"
+        type: boolean
+        default: false
   push:
     paths: ["App/**", "Widget/**", "Support/**", "Resources/**", "project.yml", ".github/workflows/build-ipa.yml"]
 permissions:
@@ -41,6 +46,8 @@ jobs:
           name: HarkRSS-unsigned-ipa
           path: HarkRSS-unsigned.ipa
       - name: Publish release
+        # Only when started by hand with publish ticked; pushes just build an artifact.
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
