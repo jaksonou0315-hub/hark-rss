@@ -20,7 +20,7 @@ enum FeedCatalog {
             Entry(name: "少数派", url: "https://sspai.com/feed", note: "数字生活、效率工具"),
             Entry(name: "爱范儿", url: "https://www.ifanr.com/feed", note: "科技新闻和评测"),
             Entry(name: "IT之家", url: "https://www.ithome.com/rss/", note: "快讯，更新很勤"),
-            Entry(name: "36氪", url: "https://36kr.com/feed", note: "创投和商业科技"),
+            Entry(name: "36氪快讯", url: "https://rsshub.rssforever.com/36kr/newsflashes", note: "创投和商业科技（经 RSSHub）"),
             Entry(name: "The Verge", url: "https://www.theverge.com/rss/index.xml", note: "英文科技媒体"),
             Entry(name: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index", note: "英文深度科技"),
             Entry(name: "Hacker News", url: "https://hnrss.org/frontpage", note: "程序员社区首页"),

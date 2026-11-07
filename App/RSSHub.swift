@@ -30,6 +30,8 @@ enum RSSHub {
     /// If `raw` is an RSSHub address, the route path with its query ("/weibo/user/1?limit=20").
     static func path(of raw: String) -> String? {
         guard let c = URLComponents(string: raw), let host = c.host?.lowercased() else { return nil }
+        // 36kr.com/feed now answers with an anti-bot page; serve it through RSSHub instead.
+        if host.hasSuffix("36kr.com"), c.path == "/feed" || c.path == "/feed/" { return "/36kr/newsflashes" }
         var hosts = knownHosts
         if let cu = custom, let h = URL(string: cu)?.host?.lowercased() { hosts.insert(h) }
         guard hosts.contains(host) else { return nil }
