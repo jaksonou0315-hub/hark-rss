@@ -16,6 +16,14 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink { TranslateSettingsForm().navigationTitle("阅读翻译") } label: {
+                    Label("阅读翻译", systemImage: "character.bubble")
+                }
+            } footer: {
+                Text("目标语言、系统翻译语言包下载、AI 翻译服务商和模型。")
+            }
+
+            Section {
                 Toggle("新消息通知", isOn: $store.notify)
                 Picker("后台刷新间隔", selection: $store.refreshMinutes) {
                     Text("15 分钟").tag(15)

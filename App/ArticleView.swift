@@ -14,6 +14,9 @@ struct ArticleView: View {
     @State private var translated: [HTMLBlock]?
     @State private var translateFailed = false
     @State private var canTranslate = false
+    @State private var translateRequest = 0
+    @State private var translateTarget = TranslatePrefs.target
+    @State private var translateError = ""
     @State private var anchor: Int?
     @State private var resumed = false
     @State private var showReader = false
@@ -94,7 +97,8 @@ struct ArticleView: View {
             translated = nil; translatedTitle = nil
             if translateOn { translateOn = false }
             let sample = ([item.title] + blocks.compactMap(\.plainText)).joined(separator: " ")
-            canTranslate = ArticleLanguage.available && ArticleLanguage.needsTranslation(sample)
+            translateTarget = TranslatePrefs.target
+            canTranslate = TranslatePrefs.canTranslate && ArticleLanguage.needsTranslation(sample, target: translateTarget.id)
             if !resumed, let p = ReadingProgress.position(item.id), p > 1, p < blocks.count {
                 resumed = true
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -106,8 +110,9 @@ struct ArticleView: View {
             if v >= blocks.count - 2 { ReadingProgress.clear(item.id) } else if v > 1 { ReadingProgress.save(item.id, v) }
         }
         .alert("摘要没有生成", isPresented: $summaryFailed) { Button("好", role: .cancel) {} } message: { Text("本机模型暂时不可用，稍后再试。") }
-        .modifier(TranslateTask(active: $translateOn, texts: translateTexts) { out in
-            guard let out, !out.isEmpty else { translateOn = false; translateFailed = true; return }
+        .modifier(TranslateTask(request: translateRequest, texts: translateTexts, target: translateTarget) { out, err in
+            guard translateOn else { return }
+            guard let out, !out.isEmpty else { translateOn = false; translateError = err ?? ""; translateFailed = true; return }
             translatedTitle = out[0]
             var rest = out.dropFirst().makeIterator()
             translated = blocks.map { b in
@@ -115,7 +120,7 @@ struct ArticleView: View {
                 return b
             }
         })
-        .alert("翻译没有完成", isPresented: $translateFailed) { Button("好", role: .cancel) {} } message: { Text("请在系统「设置 > 通用 > 语言与地区 > 翻译语言」下载中文和原文语言后再试。") }
+        .alert("翻译没有完成", isPresented: $translateFailed) { Button("好", role: .cancel) {} } message: { Text(translateError) }
         .sheet(isPresented: $showVideo) { VideoPlayer(player: Player.shared.avPlayer).ignoresSafeArea() }
         .alert("抓取全文失败", isPresented: $fullError) { Button("好", role: .cancel) {} } message: { Text("可以试试阅读模式或打开原文。") }
     }
@@ -137,7 +142,24 @@ struct ArticleView: View {
                     barButton(store.isLater(item) ? "clock.fill" : "clock") { store.toggleLater(item) }
                     if canTranslate {
                         barButton(translateOn ? "character.bubble.fill" : "character.bubble") {
-                            if translateOn { translateOn = false } else { translateOn = true }
+                            if translateOn { translateOn = false } else {
+                                translateOn = true
+                                if translated == nil { translateRequest += 1 }
+                            }
+                        }
+                        .contextMenu {
+                            Section("翻译成") {
+                                ForEach(TargetLanguage.all) { l in
+                                    Button {
+                                        translateTarget = l
+                                        translated = nil; translatedTitle = nil
+                                        translateOn = true
+                                        translateRequest += 1
+                                    } label: {
+                                        if l.id == translateTarget.id { Label(l.name, systemImage: "checkmark") } else { Text(l.name) }
+                                    }
+                                }
+                            }
                         }
                     }
                     barButton(speakIcon) { speak() }
@@ -211,8 +233,8 @@ struct ArticleView: View {
             }
             if translateOn {
                 HStack(spacing: 6) {
-                    if translated == nil { ProgressView().controlSize(.small); Text("正在本机翻译…") }
-                    else { Image(systemName: "character.bubble"); Text("已翻译为中文 · 再点一次看原文") }
+                    if translated == nil { ProgressView().controlSize(.small); Text(TranslatePrefs.effectiveEngine == .ai ? "AI 正在翻译…" : "正在本机翻译…") }
+                    else { Image(systemName: "character.bubble"); Text("已翻译为\(translateTarget.name) · 再点一次看原文") }
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
