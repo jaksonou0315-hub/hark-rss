@@ -111,7 +111,7 @@ struct SettingsView: View {
 
             Section("关于") {
                 LabeledContent("版本", value: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "")
-                Text("默认订阅 Hark 推送源，也能在「订阅」里添加任意 RSS、Atom 或 JSON Feed。")
+                Text("串联看世界")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
