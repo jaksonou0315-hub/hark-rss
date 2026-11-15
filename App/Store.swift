@@ -62,7 +62,7 @@ final class FeedStore: ObservableObject {
         health = Self.load("health", [UUID: SourceHealth].self) ?? [:]
         retentionDays = d.object(forKey: "retentionDays") == nil ? 30 : d.integer(forKey: "retentionDays")
         if sources.isEmpty {
-            sources = [FeedSource(name: "Hark 推送", url: FeedSource.defaultFeed, group: "Hark")]
+            sources = [FeedSource(name: "喵讯", url: FeedSource.defaultFeed, group: "Hark")]
             persist(sources, "sources")
         }
         #if DEBUG
@@ -373,7 +373,7 @@ final class FeedStore: ObservableObject {
     // MARK: OPML
     func exportOPML() -> String {
         func esc(_ s: String) -> String { s.escapedHTML }
-        var out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<opml version=\"2.0\">\n<head><title>Hark 推送订阅</title></head>\n<body>\n"
+        var out = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<opml version=\"2.0\">\n<head><title>喵讯订阅</title></head>\n<body>\n"
         for g in groups {
             out += "  <outline text=\"\(esc(g))\" title=\"\(esc(g))\">\n"
             for s in sources where groupName(s) == g {

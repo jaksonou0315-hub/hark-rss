@@ -46,7 +46,7 @@ struct WidgetRefreshIntent: AppIntent {
 
 struct HarkProvider: TimelineProvider {
     func placeholder(in context: Context) -> HarkEntry {
-        HarkEntry(date: Date(), items: [FeedItem(title: "Hark 推送的最新消息会显示在这里", link: "", summary: "", date: Date(), guid: "p", source: "Hark 推送")])
+        HarkEntry(date: Date(), items: [FeedItem(title: "喵讯的最新消息会显示在这里", link: "", summary: "", date: Date(), guid: "p", source: "喵讯")])
     }
     func getSnapshot(in context: Context, completion: @escaping (HarkEntry) -> Void) {
         Task { completion(HarkEntry(date: Date(), items: await Self.load(), page: WidgetCache.page)) }
@@ -65,7 +65,7 @@ struct HarkProvider: TimelineProvider {
             return cached
         }
         WidgetCache.skipFetch = false
-        let src = FeedSource(name: "Hark 推送", url: FeedSource.defaultFeed)
+        let src = FeedSource(name: "喵讯", url: FeedSource.defaultFeed)
         guard let u = URL(string: src.url),
               let r = try? await URLSession.shared.data(from: u) else { return cached }
         let items = FeedParser.parse(r.0, source: src).1
@@ -108,10 +108,10 @@ struct HarkWidgetView: View {
         Group {
             switch family {
             case .accessoryInline:
-                Label(visible.first?.title ?? "Hark 推送：暂无消息", systemImage: "antenna.radiowaves.left.and.right")
+                Label(visible.first?.title ?? "喵讯：暂无消息", systemImage: "antenna.radiowaves.left.and.right")
             case .accessoryRectangular:
                 VStack(alignment: .leading, spacing: 2) {
-                    Label("Hark 推送", systemImage: "antenna.radiowaves.left.and.right")
+                    Label("喵讯", systemImage: "antenna.radiowaves.left.and.right")
                         .font(.caption2.weight(.bold))
                     Text(visible.first?.title ?? "暂无消息").font(.caption).lineLimit(2)
                 }
@@ -133,7 +133,7 @@ struct HarkWidgetView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Label("Hark 推送", systemImage: "antenna.radiowaves.left.and.right")
+                Label("喵讯", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -179,8 +179,8 @@ struct HarkWidget: Widget {
         StaticConfiguration(kind: "HarkWidget", provider: HarkProvider()) { entry in
             HarkWidgetView(entry: entry)
         }
-        .configurationDisplayName("Hark 推送")
-        .description("最新的 Hark 推送。点箭头看下一组，点刷新重新拉取。")
+        .configurationDisplayName("喵讯")
+        .description("最新的 喵讯。点箭头看下一组，点刷新重新拉取。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryRectangular, .accessoryInline])
     }
 }

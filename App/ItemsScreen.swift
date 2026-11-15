@@ -24,7 +24,7 @@ struct ItemsScreen: View {
         case .later: return "稍后读"
         case .timeline:
             switch scope {
-            case .all: return "Hark 推送"
+            case .all: return "喵讯"
             case .group(let g): return g
             case .source(let id): return store.sources.first { $0.id == id }?.name ?? "订阅源"
             }

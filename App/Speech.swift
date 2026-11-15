@@ -118,7 +118,7 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AV
 
     /// Plays a short sample of the chosen online voice.
     func preview(voice: String) async -> Bool {
-        let sample = "你好，我是\(EdgeTTS.voices.first { $0.id == voice }?.name ?? "")。这是 Hark 推送的朗读声音。"
+        let sample = "你好，我是\(EdgeTTS.voices.first { $0.id == voice }?.name ?? "")。这是 喵讯的朗读声音。"
         do {
             let d = try await EdgeTTS.synthesize(sample, voice: voice, rate: Self.edgeRate, pitch: Self.edgePitch)
             prepareSession()

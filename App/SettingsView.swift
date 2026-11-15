@@ -100,13 +100,13 @@ struct SettingsView: View {
             }
 
             Section {
-                Label("“刷新 Hark 推送”", systemImage: "arrow.clockwise")
-                Label("“Hark 推送有几条未读”", systemImage: "circle.inset.filled")
-                Label("“用 Hark 推送添加订阅”", systemImage: "plus.circle")
+                Label("“刷新 喵讯”", systemImage: "arrow.clockwise")
+                Label("“喵讯有几条未读”", systemImage: "circle.inset.filled")
+                Label("“用 喵讯添加订阅”", systemImage: "plus.circle")
             } header: {
                 Text("Siri 与快捷指令")
             } footer: {
-                Text("在「快捷指令」App 里也能找到这些动作。把「添加到 Hark 推送」做成分享菜单快捷指令，就能在 Safari 里一键订阅当前网站。收藏和稍后读的文章可以在系统搜索里搜到。")
+                Text("在「快捷指令」App 里也能找到这些动作。把「添加到 喵讯」做成分享菜单快捷指令，就能在 Safari 里一键订阅当前网站。收藏和稍后读的文章可以在系统搜索里搜到。")
             }
 
             Section("关于") {

@@ -1,7 +1,7 @@
 import AppIntents
 
 struct RefreshFeedsIntent: AppIntent {
-    static var title: LocalizedStringResource = "刷新 Hark 推送"
+    static var title: LocalizedStringResource = "刷新 喵讯"
     static var description = IntentDescription("拉取所有订阅源的新文章。")
     static var openAppWhenRun: Bool = false
 
@@ -15,7 +15,7 @@ struct RefreshFeedsIntent: AppIntent {
 }
 
 struct UnreadCountIntent: AppIntent {
-    static var title: LocalizedStringResource = "Hark 推送未读数"
+    static var title: LocalizedStringResource = "喵讯未读数"
     static var description = IntentDescription("告诉你还有几篇没读。")
     static var openAppWhenRun: Bool = false
 
@@ -27,7 +27,7 @@ struct UnreadCountIntent: AppIntent {
 }
 
 struct AddFeedIntent: AppIntent {
-    static var title: LocalizedStringResource = "添加到 Hark 推送"
+    static var title: LocalizedStringResource = "添加到 喵讯"
     static var description = IntentDescription("把网址加为订阅。可以放进分享菜单的快捷指令里用。")
     static var openAppWhenRun: Bool = false
 

@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "3.3"
-    CURRENT_PROJECT_VERSION: "15"
+    MARKETING_VERSION: "3.4"
+    CURRENT_PROJECT_VERSION: "16"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
@@ -25,7 +25,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkrss
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Support/App-Info.plist
-        INFOPLIST_KEY_CFBundleDisplayName: "Hark 推送"
+        INFOPLIST_KEY_CFBundleDisplayName: "喵讯"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
@@ -43,6 +43,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkrss.widget
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Support/Widget-Info.plist
-        INFOPLIST_KEY_CFBundleDisplayName: "Hark 推送"
+        INFOPLIST_KEY_CFBundleDisplayName: "喵讯"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES

@@ -30,7 +30,7 @@ struct PadRootView: View {
                     Label("设置", systemImage: "gearshape").tag(Pane.settings)
                 }
             }
-            .navigationTitle("Hark 推送")
+            .navigationTitle("喵讯")
         } content: {
             NavigationStack { column }
         } detail: {
