@@ -87,6 +87,17 @@ struct FolderView: View {
     @State private var error: String?
     @State private var showAll = false
     @State private var toast: String?
+    @State private var pushDir: RemoteFile?
+    @State private var opening: String?
+
+    private var smart: Bool { currentSource.extra["smartFolders"] == "1" }
+    private func smartItem(_ f: RemoteFile) -> LibraryItem? {
+        guard smart, f.isDir else { return nil }
+        let t = NameParser.parse(f.name, parents: []).title.lowercased()
+        guard !t.isEmpty else { return nil }
+        return library.items.first { $0.title.lowercased() == t || ($0.originalTitle ?? "").lowercased() == t }
+            ?? library.items.first { it in it.files.contains { $0.sourceId == currentSource.id && $0.file.meta["folder"] != nil && $0.file.path.contains("/\(f.name)/") } }
+    }
 
     private var visible: [RemoteFile] { showAll ? files : files.filter { $0.isDir || $0.isVideo } }
     private var posterMode: Bool { target.source.kind.isMediaServer && target.dir != nil && files.filter({ $0.posterURL != nil }).count > 3 }
@@ -125,7 +136,7 @@ struct FolderView: View {
                     ForEach(visible) { f in
                         cell(f) {
                             HStack(spacing: 12) {
-                                if let p = f.posterURL {
+                                if let p = f.posterURL ?? smartItem(f)?.poster {
                                     PosterImage(url: p, title: "").frame(width: 40, height: 56).clipShape(RoundedRectangle(cornerRadius: 6))
                                 } else {
                                     Image(systemName: f.isDir ? "folder.fill" : (f.isVideo ? "film" : (f.isSubtitle ? "captions.bubble" : "doc")))
@@ -133,9 +144,16 @@ struct FolderView: View {
                                         .frame(width: 40)
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(f.name).lineLimit(2)
-                                    if !f.sizeText.isEmpty { Text(f.sizeText).font(.caption).foregroundStyle(.secondary) }
+                                    if let it = smartItem(f) {
+                                        Text(it.title).lineLimit(2)
+                                        Text([it.year.map { String($0) }, it.isTV ? "剧集" : "电影"].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text(f.name).lineLimit(2)
+                                        if !f.sizeText.isEmpty { Text(f.sizeText).font(.caption).foregroundStyle(.secondary) }
+                                    }
                                 }
+                                if opening == f.id { Spacer(); ProgressView() }
                             }
                         }
                         .listRowBackground(Color.clear)
@@ -162,11 +180,36 @@ struct FolderView: View {
             }
         }
         .task { await load() }
+        .navigationDestination(item: $pushDir) { d in FolderView(target: BrowseTarget(source: target.source, dir: d)) }
+    }
+
+    /// 智能文件夹: a folder holding a single video plays it straight away.
+    private func openSmart(_ f: RemoteFile) {
+        guard opening == nil else { return }
+        opening = f.id
+        Task {
+            defer { opening = nil }
+            if let list = try? await store.provider(for: currentSource).list(f) {
+                let vids = list.filter { $0.isVideo && !$0.name.lowercased().contains("sample") }
+                if vids.count == 1, !list.contains(where: { $0.isDir }) {
+                    router.play(PlayRequest(source: currentSource, file: vids[0], siblings: list))
+                    return
+                }
+            }
+            pushDir = f
+        }
     }
 
     @ViewBuilder
     private func cell<L: View>(_ f: RemoteFile, @ViewBuilder label: () -> L) -> some View {
-        if f.isDir {
+        if f.isDir && smart {
+            Button { openSmart(f) } label: { label().contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button { pushDir = f } label: { Label("打开文件夹", systemImage: "folder") }
+                    Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
+                }
+        } else if f.isDir {
             NavigationLink(value: BrowseTarget(source: target.source, dir: f)) { label() }
                 .buttonStyle(.plain)
                 .contextMenu {
@@ -214,9 +257,15 @@ struct SourceEditor: View {
     @State private var smsBusy = false
     @State private var smsCode = ""
     @State private var verificationId = ""
+    @State private var showWebLogin = false
+    @State private var showAdvanced = false
 
     private func binding(_ key: String) -> Binding<String> {
         Binding(get: { source.extra[key] ?? "" }, set: { source.extra[key] = $0 })
+    }
+    /// Toggle stored in extra as "1"/"0" with a default.
+    private func flag(_ key: String, _ def: Bool) -> Binding<Bool> {
+        Binding(get: { source.extra[key].map { $0 == "1" } ?? def }, set: { source.extra[key] = $0 ? "1" : "0" })
     }
 
     var body: some View {
@@ -306,8 +355,59 @@ struct SourceEditor: View {
                     } header: { Text("或：手动填写令牌") } footer: {
                         Text("短信触发人机验证时，可在电脑浏览器登录光鸭网页版，用「光鸭凭证获取」脚本复制 refresh_token 粘贴到这里。")
                     }
+                case .pan123, .pcloud:
+                    Section {
+                        TextField(source.kind == .pan123 ? "手机号或邮箱" : "邮箱", text: $source.username)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
+                        SecureField("密码", text: $source.password)
+                        if source.isLoggedIn { Label("已登录", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
+                    } header: { Text(source.kind.title) } footer: {
+                        Text(source.kind == .pan123 ? "使用 123 云盘账号密码登录（网页端接口，与 OpenList 相同方式）。点「保存」时登录。"
+                                                    : "使用 pCloud 账号密码登录，自动识别美国 / 欧洲数据中心。开了两步验证的账号暂不支持。")
+                    }
+                case .onedrive, .dropbox, .yandex:
+                    Section {
+                        Button { showWebLogin = true } label: {
+                            Label(source.isLoggedIn ? "重新登录" : "登录 \(source.kind.title)", systemImage: "person.badge.key")
+                        }
+                        if source.isLoggedIn { Label("已登录", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
+                    } header: { Text(source.kind.title) } footer: {
+                        Text("通过 OpenList 令牌服务（api.oplist.org）授权，无需自己申请开发者应用。授权只读取文件列表和播放地址，令牌只保存在本机。")
+                    }
+                    Section {
+                        SecureField("refresh_token", text: $source.refreshToken)
+                    } header: { Text("或：手动填写令牌") } footer: {
+                        Text("也可以在电脑浏览器打开 api.oplist.org 获取 refresh_token 后粘贴到这里。")
+                    }
+                case .box:
+                    Section {
+                        TextField("Client ID", text: binding("clientId")).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Client Secret", text: binding("clientSecret"))
+                        Button { showWebLogin = true } label: {
+                            Label(source.isLoggedIn ? "重新登录" : "登录 Box", systemImage: "person.badge.key")
+                        }
+                        .disabled((source.extra["clientId"] ?? "").trimmed.isEmpty || (source.extra["clientSecret"] ?? "").trimmed.isEmpty)
+                        if source.isLoggedIn { Label("已登录", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
+                    } header: { Text("Box") } footer: {
+                        Text("在 app.box.com/developers/console 新建「Custom App › User Authentication (OAuth 2.0)」，Redirect URI 填 http://localhost，再把 Client ID / Secret 填到这里。")
+                    }
                 case .local:
                     EmptyView()
+                }
+
+                if source.kind != .local {
+                    Section {
+                        DisclosureGroup("高级", isExpanded: $showAdvanced) {
+                            Toggle("自动扫描", isOn: flag("autoScan", true))
+                            Toggle("预获取文件详情", isOn: flag("prefetch", true))
+                            Toggle("预缓存海报", isOn: flag("posterCache", true))
+                            Toggle("智能文件夹", isOn: flag("smartFolders", false))
+                        }
+                    } footer: {
+                        if showAdvanced {
+                            Text("自动扫描：保存后把整个网盘加入媒体库并扫描。预获取文件详情：扫描时就下载类型、分级、国家等资料。预缓存海报：扫描后提前下载海报，浏览更快。智能文件夹：浏览时用海报和片名显示影片文件夹，只有一个视频的文件夹点一下直接播放。")
+                        }
+                    }
                 }
 
                 if source.kind.needsQRLogin {
@@ -331,6 +431,9 @@ struct SourceEditor: View {
                 if (source.kind == .quark || source.kind == .guangya), (source.extra["deviceId"] ?? "").count != 32 {
                     source.extra["deviceId"] = Hash.randomHex32()
                 }
+            }
+            .sheet(isPresented: $showWebLogin) {
+                OAuthLoginSheet(source: source) { updated in source = updated; message = "登录成功" }
             }
             .sheet(isPresented: $showLogin) {
                 QRLoginView(source: source) { updated in source = updated; store.upsert(updated) }
@@ -379,7 +482,21 @@ struct SourceEditor: View {
                 return
             }
         }
+        if source.kind.needsPasswordLogin {
+            do {
+                source.token = ""
+                source = source.kind == .pan123 ? try await Pan123Provider.login(source) : try await PCloudProvider.login(source)
+            } catch {
+                message = error.localizedDescription
+                return
+            }
+        }
+        let isNew = store.source(source.id) == nil
         store.upsert(source)
+        if source.kind != .local, source.extra["autoScan"] != "0", source.isLoggedIn,
+           isNew || !LibraryStore.shared.folders.contains(where: { $0.sourceId == source.id }) {
+            LibraryStore.shared.addRoot(source: source)
+        }
         dismiss()
     }
 }

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
-    case local, smb, webdav, emby, jellyfin, aliyun, pan115, baidu, quark, guangya
+    case local, smb, webdav, emby, jellyfin, aliyun, pan123, pan115, baidu, quark, guangya, onedrive, dropbox, box, pcloud, yandex
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -16,6 +16,12 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .baidu: return "百度网盘"
         case .quark: return "夸克网盘"
         case .guangya: return "光鸭云盘"
+        case .pan123: return "123 云盘"
+        case .onedrive: return "OneDrive"
+        case .dropbox: return "Dropbox"
+        case .box: return "Box"
+        case .pcloud: return "pCloud"
+        case .yandex: return "Yandex.Disk"
         }
     }
     var icon: String {
@@ -30,6 +36,12 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .baidu: return "cloud.circle"
         case .quark: return "sparkles"
         case .guangya: return "bird"
+        case .pan123: return "123.rectangle"
+        case .onedrive: return "cloud.fill"
+        case .dropbox: return "shippingbox"
+        case .box: return "cube.box"
+        case .pcloud: return "p.circle"
+        case .yandex: return "y.circle"
         }
     }
     var tint: Color {
@@ -44,10 +56,20 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .baidu: return .indigo
         case .quark: return .blue
         case .guangya: return .yellow
+        case .pan123: return .indigo
+        case .onedrive: return .blue
+        case .dropbox: return .blue
+        case .box: return .blue
+        case .pcloud: return .teal
+        case .yandex: return .red
         }
     }
     var needsQRLogin: Bool { self == .aliyun || self == .pan115 || self == .baidu || self == .quark }
     var isMediaServer: Bool { self == .emby || self == .jellyfin }
+    /// Signs in through a web page (OpenList token service / own OAuth app).
+    var needsWebLogin: Bool { self == .onedrive || self == .dropbox || self == .yandex || self == .box }
+    /// Signs in with account + password on save.
+    var needsPasswordLogin: Bool { self == .pan123 || self == .pcloud }
 }
 
 struct MediaSource: Codable, Identifiable, Hashable {

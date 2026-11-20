@@ -34,6 +34,12 @@ enum Providers {
         case .baidu: return BaiduProvider(s)
         case .quark: return QuarkTVProvider(s)
         case .guangya: return GuangyaProvider(s)
+        case .pan123: return Pan123Provider(s)
+        case .onedrive: return OneDriveProvider(s)
+        case .dropbox: return DropboxProvider(s)
+        case .box: return BoxProvider(s)
+        case .pcloud: return PCloudProvider(s)
+        case .yandex: return YandexProvider(s)
         }
     }
 

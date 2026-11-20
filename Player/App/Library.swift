@@ -82,6 +82,16 @@ final class LibraryStore: ObservableObject {
         Task { await scan() }
     }
 
+    /// Whole drive as one library folder (used by 自动扫描).
+    func addRoot(source: MediaSource) {
+        guard !folders.contains(where: { $0.sourceId == source.id && $0.dir.meta["root"] == "1" }) else { return }
+        var root = RemoteFile(id: "__root__", name: source.name, path: "", isDir: true)
+        root.meta["root"] = "1"
+        folders.append(LibraryFolder(sourceId: source.id, dir: root, title: "\(source.name) · 全部"))
+        save()
+        Task { await scan() }
+    }
+
     func removeFolder(_ f: LibraryFolder) {
         folders.removeAll { $0.id == f.id }
         items = items.compactMap { item in
@@ -98,12 +108,35 @@ final class LibraryStore: ObservableObject {
 
     func clear() { items = []; save() }
 
+    private func precachePosters(_ list: [LibraryItem]) {
+        let off = Set(SourceStore.shared.sources.filter { $0.extra["posterCache"] == "0" }.map(\.id))
+        let urls = list.filter { !$0.files.allSatisfy { off.contains($0.sourceId) } }.flatMap { [$0.poster, $0.backdrop] }.compactMap { $0 }
+        guard !urls.isEmpty else { return }
+        Task.detached(priority: .background) {
+            for chunk in stride(from: 0, to: urls.count, by: 6).map({ Array(urls[$0..<min($0 + 6, urls.count)]) }) {
+                await withTaskGroup(of: Void.self) { g in
+                    for u in chunk {
+                        g.addTask {
+                            let r = URLRequest(url: u)
+                            if URLCache.shared.cachedResponse(for: r) == nil { _ = try? await URLSession.shared.data(for: r) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Fills genres / certification / countries for matched items that don't have them yet.
     func enrich() async {
         guard !enriching else { return }
         enriching = true
         defer { enriching = false }
-        let todo = items.filter { $0.tmdbId != nil && ($0.certification == nil || $0.genres == nil) }
+        let srcs = SourceStore.shared.sources
+        let prefetchOff = Set(srcs.filter { $0.extra["prefetch"] == "0" }.map(\.id))
+        let todo = items.filter { it in
+            it.tmdbId != nil && (it.certification == nil || it.genres == nil)
+                && !(it.files.allSatisfy { prefetchOff.contains($0.sourceId) })
+        }
         var changed = 0
         for it in todo {
             guard let id = it.tmdbId, let d = await TMDB.details(id: id, tv: it.isTV) else { continue }
@@ -143,12 +176,12 @@ final class LibraryStore: ObservableObject {
                 found.append(Found(source: src, folder: folder, file: tagged, parents: [], subs: []))
                 continue
             }
-            var queue: [(RemoteFile, [String], Int)] = [(folder.dir, [folder.dir.name], 0)]
+            var queue: [(RemoteFile, [String], Int)] = [(folder.dir, folder.dir.meta["root"] == "1" ? [] : [folder.dir.name], 0)]
             while !queue.isEmpty, found.count < 5000 {
                 let (dir, parents, depth) = queue.removeFirst()
                 progress = "正在扫描 \(dir.name)…"
                 let list: [RemoteFile]
-                do { list = try await provider.list(dir) } catch {
+                do { list = try await provider.list(dir.meta["root"] == "1" ? nil : dir) } catch {
                     errors.append("\(dir.name)：\(error.localizedDescription)"); continue
                 }
                 for f in list {
@@ -234,6 +267,7 @@ final class LibraryStore: ObservableObject {
         UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
         save()
         Task { await enrich() }
+        precachePosters(newItems)
         if newItems.isEmpty {
             lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
         } else {

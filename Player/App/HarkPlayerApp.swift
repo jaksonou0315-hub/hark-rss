@@ -7,6 +7,10 @@ struct HarkPlayerApp: App {
     @StateObject private var router = PlaybackRouter.shared
     @StateObject private var settings = AppSettings.shared
 
+    init() {
+        URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 800 << 20)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
