@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AVKit
 import AVFoundation
+import Combine
 
 /// Apple-native engine (AVPlayer) for MP4/MOV/M4V over http(s)/file: system Dolby Vision, HDR10, Dolby Atmos (E-AC-3 JOC) and spatial audio.
 enum EngineChooser {
@@ -84,6 +85,7 @@ final class NativePlayerModel: ObservableObject {
     private var resumeKey: String?
     private var timeObs: Any?
     private var endObs: NSObjectProtocol?
+    private var styleSub: AnyCancellable?
 
     init(_ r: PlayRequest) { request = r }
 
@@ -98,6 +100,10 @@ final class NativePlayerModel: ObservableObject {
             if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }
             let asset = AVURLAsset(url: p.url, options: opts)
             let item = AVPlayerItem(asset: asset)
+            item.textStyleRules = SubtitleStyle.shared.avTextStyleRules
+            styleSub = SubtitleStyle.shared.objectWillChange
+                .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
+                .sink { [weak item] _ in item?.textStyleRules = SubtitleStyle.shared.avTextStyleRules }
             item.externalMetadata = [Self.meta(.commonIdentifierTitle, request.title ?? request.file.baseName)]
             player.replaceCurrentItem(with: item)
             player.appliesMediaSelectionCriteriaAutomatically = true

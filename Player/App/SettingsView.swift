@@ -40,6 +40,8 @@ struct SettingsView: View {
                     Text("外挂字幕（.srt/.ass/.ssa/.vtt）会自动转为 UTF-8，GBK/Big5 编码也能正常显示。")
                 }
 
+                SubtitleStyleEditor()
+
                 Section {
                     SecureField("射手网 (assrt.net) API Token", text: $settings.assrtToken)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()

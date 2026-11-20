@@ -352,24 +352,30 @@ final class LiveCaptioner: ObservableObject {
 
 struct LiveCaptionOverlay: View {
     @ObservedObject var captioner: LiveCaptioner
+    @ObservedObject private var style = SubtitleStyle.shared
+    private func f(_ size: Double, _ w: Font.Weight) -> Font {
+        let sz = size * style.scale / 100
+        let wt: Font.Weight = style.bold ? .bold : w
+        return style.font.isEmpty ? .system(size: sz, weight: wt) : .custom(style.font, size: sz).weight(wt)
+    }
     var body: some View {
         VStack {
             Spacer()
             if captioner.running, !(captioner.original.isEmpty && captioner.translated.isEmpty) {
                 VStack(spacing: 4) {
                     if AppSettings.shared.aiTranslate, !captioner.translated.isEmpty {
-                        Text(captioner.translated).font(.system(size: 19, weight: .semibold))
+                        Text(captioner.translated).font(f(19, .semibold))
                     }
                     if AppSettings.shared.aiShowOriginal || !AppSettings.shared.aiTranslate || captioner.translated.isEmpty {
-                        Text(captioner.original).font(.system(size: AppSettings.shared.aiTranslate ? 14 : 19, weight: .medium))
+                        Text(captioner.original).font(f(AppSettings.shared.aiTranslate ? 14 : 19, .medium))
                             .opacity(AppSettings.shared.aiTranslate ? 0.85 : 1)
                     }
                 }
-                .foregroundStyle(.white)
-                .shadow(color: .black, radius: 2)
+                .foregroundStyle(style.swiftUIColor)
+                .shadow(color: .black.opacity(style.outline == 0 ? 0 : 1), radius: 2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(.black.opacity(style.background ? style.backgroundOpacity : 0), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .padding(.horizontal, 24)
                 .padding(.bottom, 36)
             }

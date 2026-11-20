@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import VLCKitSPM
+import Combine
 
 @MainActor
 final class PlaybackRouter: ObservableObject {
@@ -15,7 +16,12 @@ struct TrackInfo: Identifiable, Hashable { var id: Int32; var name: String }
 
 @MainActor
 final class PlayerController: NSObject, ObservableObject {
-    let player: VLCMediaPlayer = AppSettings.shared.dolbyStereo ? VLCMediaPlayer(options: ["--stereo-mode=1"]) : VLCMediaPlayer()
+    let player: VLCMediaPlayer = {
+        var o = SubtitleStyle.shared.vlcOptions
+        if AppSettings.shared.dolbyStereo { o.append("--stereo-mode=1") }
+        return VLCMediaPlayer(options: o)
+    }()
+    private var styleSub: AnyCancellable?
     @Published var badges: [String] = []
     private var didBadge = false
     let request: PlayRequest
@@ -56,6 +62,28 @@ final class PlayerController: NSObject, ObservableObject {
         videoView.backgroundColor = .black
         player.drawable = videoView
         captioner.bridge = bridge
+        styleSub = SubtitleStyle.shared.objectWillChange
+            .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.applySubtitleStyleLive() }
+    }
+
+    /// Push the current subtitle style into the running renderer and redraw the active track.
+    func applySubtitleStyleLive() {
+        let st = SubtitleStyle.shared
+        let p = player as NSObject
+        func call(_ name: String, _ v: Any) {
+            let sel = NSSelectorFromString(name)
+            if p.responds(to: sel) { p.perform(sel, with: v) }
+        }
+        call("setTextRendererFont:", st.vlcFontName as NSString)
+        call("setTextRendererFontSize:", NSNumber(value: st.vlcRelFontSize))
+        call("setTextRendererFontColor:", NSNumber(value: st.color))
+        call("setTextRendererFontForceBold:", NSNumber(value: st.bold))
+        let cur = player.currentVideoSubTitleIndex
+        if cur >= 0 {
+            player.currentVideoSubTitleIndex = -1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.player.currentVideoSubTitleIndex = cur }
+        }
     }
 
     func start() async {
@@ -385,25 +413,20 @@ struct PlayerView: View {
 
             Spacer()
 
-            VStack(spacing: 6) {
-                Slider(value: Binding(get: { scrubbing ? scrubValue : c.position },
-                                      set: { scrubValue = $0 }),
-                       in: 0...1) { editing in
-                    scrubbing = editing
-                    if !editing { c.seek(scrubValue) }
-                    scheduleHide()
-                }
-                .tint(.white)
+            VStack(spacing: 2) {
+                ThinScrubber(value: scrubbing ? scrubValue : c.position,
+                             onChanged: { v in scrubbing = true; scrubValue = v; hideTask?.cancel() },
+                             onEnded: { v in scrubValue = v; c.seek(v); scrubbing = false; scheduleHide() })
                 HStack {
                     Text(PlayerController.fmt(scrubbing ? Int32(Float(c.lengthMs) * scrubValue) : c.timeMs))
                     Spacer()
                     Text("-" + PlayerController.fmt(max(0, c.lengthMs - (scrubbing ? Int32(Float(c.lengthMs) * scrubValue) : c.timeMs))))
                 }
-                .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.85))
+                .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.9))
+                .shadow(color: .black.opacity(0.6), radius: 2)
             }
-            .padding(.horizontal, 20).padding(.vertical, 14)
-            .glass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 16).padding(.bottom, 10)
+            .padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 14)
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
         }
     }
 
@@ -526,6 +549,7 @@ struct TrackSheet: View {
                             }.disabled(c.translating)
                         }
                     }
+                    SubtitleStyleEditor()
                     Section {
                         Button { openOnline() } label: { Label("在线搜索字幕…", systemImage: "magnifyingglass") }
                     }
