@@ -435,7 +435,7 @@ final class AliyunProvider: SourceProvider {
                 out.append(f)
             }
             marker = o.str("next_marker") ?? ""
-        } while !marker.isEmpty && out.count < 5000
+        } while !marker.isEmpty && out.count < 50000
         return Providers.sortFiles(out)
     }
 
@@ -502,7 +502,7 @@ final class Pan115Provider: SourceProvider {
             }
             let count = o.int("count") ?? 0
             offset += data.count
-            if data.isEmpty || offset >= count || offset > 10000 { break }
+            if data.isEmpty || offset >= count || offset > 50000 { break }
         }
         return Providers.sortFiles(out)
     }

@@ -108,6 +108,21 @@ final class LibraryStore: ObservableObject {
 
     func clear() { items = []; save() }
 
+    /// Cloud drives throttle bursts of directory listings; retry with backoff instead of silently dropping the folder.
+    private func listRetrying(_ p: SourceProvider, _ dir: RemoteFile?, cloud: Bool) async throws -> [RemoteFile] {
+        var delay: UInt64 = 1_200_000_000
+        for attempt in 0..<5 {
+            if cloud { try? await Task.sleep(nanoseconds: 200_000_000) }
+            do { return try await p.list(dir) } catch {
+                if attempt == 4 || error is CancellationError { throw error }
+                progress = "网盘限流，稍等后重试 \(dir?.name ?? "")…"
+                try? await Task.sleep(nanoseconds: delay)
+                delay *= 2
+            }
+        }
+        return []
+    }
+
     private func precachePosters(_ list: [LibraryItem]) {
         let off = Set(SourceStore.shared.sources.filter { $0.extra["posterCache"] == "0" }.map(\.id))
         let urls = list.filter { !$0.files.allSatisfy { off.contains($0.sourceId) } }.flatMap { [$0.poster, $0.backdrop] }.compactMap { $0 }
@@ -167,6 +182,7 @@ final class LibraryStore: ObservableObject {
         defer { scanning = false; progress = "" }
         var errors: [String] = []
         var found: [Found] = []
+        var failedFolders = Set<String>()
         for folder in folders {
             guard let src = SourceStore.shared.source(folder.sourceId) else { continue }
             let provider = SourceStore.shared.provider(for: src)
@@ -177,16 +193,19 @@ final class LibraryStore: ObservableObject {
                 continue
             }
             var queue: [(RemoteFile, [String], Int)] = [(folder.dir, folder.dir.meta["root"] == "1" ? [] : [folder.dir.name], 0)]
-            while !queue.isEmpty, found.count < 5000 {
+            let cloud = ![.smb, .webdav, .local, .emby, .jellyfin].contains(src.kind)
+            while !queue.isEmpty, found.count < 50000 {
                 let (dir, parents, depth) = queue.removeFirst()
                 progress = "正在扫描 \(dir.name)…"
                 let list: [RemoteFile]
-                do { list = try await provider.list(dir.meta["root"] == "1" ? nil : dir) } catch {
-                    errors.append("\(dir.name)：\(error.localizedDescription)"); continue
+                do { list = try await listRetrying(provider, dir.meta["root"] == "1" ? nil : dir, cloud: cloud) } catch {
+                    errors.append("\(dir.name)：\(error.localizedDescription)")
+                    failedFolders.insert(folder.id.uuidString)
+                    continue
                 }
                 for f in list {
                     if f.isDir {
-                        if depth < 6, !f.name.hasPrefix("@"), !["sample", "extras", "featurettes"].contains(f.name.lowercased()) {
+                        if depth < 12, !f.name.hasPrefix("@"), !["sample", "extras", "featurettes"].contains(f.name.lowercased()) {
                             queue.append((f, [f.name] + parents, depth + 1))
                         }
                     } else if f.isVideo {
@@ -261,6 +280,16 @@ final class LibraryStore: ObservableObject {
                 }
             }
             newItems.append(item)
+        }
+        // keep what we already had from folders that could not be fully read this time (rate limits etc.)
+        if !failedFolders.isEmpty {
+            let have = Set(newItems.flatMap { $0.files.map(\.id) })
+            for prev in old.values {
+                let keep = prev.files.filter { failedFolders.contains($0.file.meta["folder"] ?? "") && !have.contains($0.id) }
+                guard !keep.isEmpty else { continue }
+                if let i = newItems.firstIndex(where: { $0.id == prev.id }) { newItems[i].files += keep }
+                else { var p = prev; p.files = keep; newItems.append(p) }
+            }
         }
         items = newItems
         lastScan = Date()

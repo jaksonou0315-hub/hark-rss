@@ -135,7 +135,7 @@ final class OneDriveProvider: TokenDrive, SourceProvider {
         var next: String? = (dir.map { "\(Self.graph)/items/\($0.id)/children" } ?? "\(Self.graph)/root/children")
             + "?$top=1000&$select=id,name,size,folder,file"
         var out: [RemoteFile] = []
-        while let n = next, let u = URL(string: n), out.count < 20000 {
+        while let n = next, let u = URL(string: n), out.count < 50000 {
             let o = try await call { HTTP.request(u) }
             for it in o.arr("value") {
                 let id = it.str("id") ?? ""
@@ -166,7 +166,7 @@ final class DropboxProvider: TokenDrive, SourceProvider {
                 out.append(RemoteFile(id: it.str("id") ?? path, name: it.str("name") ?? "", path: path,
                                       isDir: it.str(".tag") == "folder", size: it.int64("size") ?? 0))
             }
-            guard o.bool("has_more") == true, let cur = o.str("cursor"), out.count < 20000 else { break }
+            guard o.bool("has_more") == true, let cur = o.str("cursor"), out.count < 50000 else { break }
             o = try await call { HTTP.request(URL(string: Self.api + "/files/list_folder/continue")!, method: "POST", json: ["cursor": cur]) }
         }
         return Providers.sortFiles(out)
@@ -187,7 +187,7 @@ final class YandexProvider: TokenDrive, SourceProvider {
         var out: [RemoteFile] = []
         var offset = 0
         let path = dir?.path ?? "disk:/"
-        while out.count < 20000 {
+        while out.count < 50000 {
             var c = URLComponents(string: Self.api + "/resources")!
             c.queryItems = [.init(name: "path", value: path), .init(name: "limit", value: "500"), .init(name: "offset", value: String(offset)),
                             .init(name: "fields", value: "_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.size,_embedded.items.resource_id,_embedded.total")]
@@ -244,7 +244,7 @@ final class BoxProvider: TokenDrive, SourceProvider {
     func list(_ dir: RemoteFile?) async throws -> [RemoteFile] {
         var out: [RemoteFile] = []
         var offset = 0
-        while out.count < 20000 {
+        while out.count < 50000 {
             let u = URL(string: "\(Self.api)/folders/\(dir?.id ?? "0")/items?fields=id,type,name,size&limit=1000&offset=\(offset)")!
             let o = try await call { HTTP.request(u) }
             let es = o.arr("entries")

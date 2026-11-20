@@ -133,7 +133,7 @@ final class QuarkTVProvider: SourceProvider {
             }
             let total = data.int("total_count") ?? 0
             page += 1
-            if files.isEmpty || page * size >= total || out.count > 10000 { break }
+            if files.isEmpty || page * size >= total || out.count > 50000 { break }
         }
         return Providers.sortFiles(out)
     }
@@ -260,7 +260,7 @@ final class GuangyaProvider: SourceProvider {
         var out: [RemoteFile] = []
         var page = 0
         let size = 100
-        while page < 200 {
+        while page < 1000 {
             let o = try await post("/userres/v1/file/get_file_list", ["parentId": parent, "page": page, "pageSize": size, "orderBy": 3, "sortType": 1])
             let data = o.dict("data") ?? [:]
             let list = data.arr("list")
