@@ -89,6 +89,7 @@ struct FolderView: View {
     @State private var toast: String?
     @State private var pushDir: RemoteFile?
     @State private var opening: String?
+    @ObservedObject private var favs = FolderFavorites.shared
 
     private var smart: Bool { currentSource.extra["smartFolders"] == "1" }
     private func smartItem(_ f: RemoteFile) -> LibraryItem? {
@@ -172,6 +173,9 @@ struct FolderView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button { favs.toggle(target.source, target.dir); toast = favs.contains(target.source, target.dir) ? "已收藏，会显示在「文件源」" : "已取消收藏" } label: {
+                        favs.contains(target.source, target.dir) ? Label("取消收藏此文件夹", systemImage: "star.slash") : Label("收藏此文件夹", systemImage: "star")
+                    }
                     if let d = target.dir {
                         Button { library.addFolder(source: target.source, dir: d); toast = "已添加到媒体库，正在扫描" } label: { Label("将此文件夹添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
                     }
@@ -200,12 +204,19 @@ struct FolderView: View {
         }
     }
 
+    private func favButton(_ f: RemoteFile) -> some View {
+        Button { favs.toggle(target.source, f); toast = favs.contains(target.source, f) ? "已收藏，会显示在「文件源」" : "已取消收藏" } label: {
+            favs.contains(target.source, f) ? Label("取消收藏", systemImage: "star.slash") : Label("收藏", systemImage: "star")
+        }
+    }
+
     @ViewBuilder
     private func cell<L: View>(_ f: RemoteFile, @ViewBuilder label: () -> L) -> some View {
         if f.isDir && smart {
             Button { openSmart(f) } label: { label().contentShape(Rectangle()) }
                 .buttonStyle(.plain)
                 .contextMenu {
+                    favButton(f)
                     Button { pushDir = f } label: { Label("打开文件夹", systemImage: "folder") }
                     Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
                 }
@@ -213,6 +224,7 @@ struct FolderView: View {
             NavigationLink(value: BrowseTarget(source: target.source, dir: f)) { label() }
                 .buttonStyle(.plain)
                 .contextMenu {
+                    favButton(f)
                     Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
                 }
         } else {
