@@ -64,7 +64,7 @@ enum DolbyBadges {
                     let sub = CMFormatDescriptionGetMediaSubType(fd)
                     if sub == kAudioFormatEnhancedAC3 { best = "Dolby Digital Plus" }
                     else if sub == kAudioFormatAC3, best == nil { best = "Dolby Digital" }
-                    else if sub == kAudioFormatAC4 { best = "Dolby AC-4" }
+                    else if sub == DolbyBadges.fourCC("ac-4") { best = "Dolby AC-4" }
                 }
             }
             if let best { out.append(best) }
@@ -153,7 +153,6 @@ struct AVPlayerVC: UIViewControllerRepresentable {
         vc.player = player
         vc.allowsPictureInPicturePlayback = true
         vc.canStartPictureInPictureAutomaticallyFromInline = true
-        vc.appliesPreferredDisplayCriteriaAutomatically = true
         vc.delegate = context.coordinator
         return vc
     }
