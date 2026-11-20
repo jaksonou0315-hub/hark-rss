@@ -37,7 +37,13 @@ final class SourceStore: ObservableObject {
         sources.removeAll { $0.id == s.id }
         providers[s.id] = nil
         save()
+        ScanCenter.shared.cancel(s.id)             // stop queued scan jobs, drop snapshots
+        LibraryStore.shared.removeSource(s.id)     // cascade: its library folders and items
+        FolderFavorites.shared.purge(source: s.id)
     }
+
+    /// Drop the cached provider so the next call rebuilds it from stored credentials (token refresh path).
+    func resetProvider(_ id: UUID) { providers[id] = nil }
 
     func move(from: IndexSet, to: Int) { sources.move(fromOffsets: from, toOffset: to); save() }
 
@@ -88,7 +94,7 @@ enum HTTP {
         let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
         guard (200..<300).contains(h.statusCode) else {
             let msg = (obj?["message"] as? String) ?? (obj?["error_description"] as? String) ?? (obj?["error"] as? String) ?? String(data: d.prefix(200), encoding: .utf8) ?? ""
-            throw AppError.message("HTTP \(h.statusCode) \(msg)")
+            throw HTTPStatusError(code: h.statusCode, retryAfter: HTTPStatusError.retryAfter(h), message: "HTTP \(h.statusCode) \(msg)")
         }
         guard let obj else { throw AppError.message("无法解析服务器响应") }
         return obj

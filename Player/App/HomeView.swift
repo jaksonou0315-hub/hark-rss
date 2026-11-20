@@ -188,7 +188,7 @@ struct HomeView: View {
             }
             Spacer()
             Menu {
-                Button { Task { await library.scan() } } label: { Label("重新扫描文件", systemImage: "arrow.clockwise") }
+                Button { Task { await library.scan(force: true) } } label: { Label("重新扫描文件", systemImage: "arrow.clockwise") }
                 Button { showFolders = true } label: { Label("管理媒体库文件夹", systemImage: "folder.badge.gearshape") }
             } label: {
                 Image(systemName: "ellipsis").font(.headline).frame(width: 44, height: 44)

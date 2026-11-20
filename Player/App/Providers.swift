@@ -187,7 +187,8 @@ final class WebDAVProvider: SourceProvider {
         let r = HTTP.request(url, method: "PROPFIND", headers: h, body: Data(body.utf8))
         let (d, resp) = try await HTTP.data(r)
         guard (200..<300).contains(resp.statusCode) else {
-            throw AppError.message(resp.statusCode == 401 ? "WebDAV 认证失败" : "WebDAV 错误 HTTP \(resp.statusCode)")
+            throw HTTPStatusError(code: resp.statusCode, retryAfter: HTTPStatusError.retryAfter(resp),
+                                  message: resp.statusCode == 401 ? "WebDAV 认证失败" : "WebDAV 错误 HTTP \(resp.statusCode)")
         }
         let entries = DAVParser.parse(d)
         let selfPath = url.path.removingPercentEncoding ?? url.path
@@ -326,6 +327,37 @@ final class EmbyProvider: SourceProvider {
             if let path = it.str("Path") { f.meta["filePath"] = path }
             return f
         }
+    }
+
+    /// Every movie / episode under a view or folder, straight from the server's library (no folder crawl).
+    func allMedia(under dir: RemoteFile?) async throws -> [RemoteFile] {
+        if source.token.isEmpty { source = try await EmbyProvider.login(source); await SourceStore.shared.updateCredentials(source) }
+        var out: [RemoteFile] = []
+        var start = 0
+        let parent = dir.map { "&ParentId=\($0.id)" } ?? ""
+        while out.count < 50000 {
+            let o = try await get("/Users/\(source.userId)/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video\(parent)&Fields=Overview,ProductionYear,Path,ParentId&SortBy=SortName&StartIndex=\(start)&Limit=500&EnableImageTypes=Primary")
+            let items = o.arr("Items")
+            for it in items {
+                let id = it.str("Id") ?? ""
+                var f = RemoteFile(id: id, name: it.str("Name") ?? "未命名", path: id, isDir: false, size: 0)
+                let type = it.str("Type") ?? "Video"
+                f.meta["type"] = type
+                if type != "Episode" { f.posterURL = image(id, tag: it.dict("ImageTags")?.str("Primary")) }
+                f.overview = it.str("Overview")
+                f.year = it.int("ProductionYear")
+                if let s = it.int("ParentIndexNumber") { f.meta["season"] = String(s) }
+                if let e = it.int("IndexNumber") { f.meta["episode"] = String(e) }
+                if let series = it.str("SeriesName") { f.meta["series"] = series }
+                if let sid = it.str("SeriesId") { f.posterURL = image(sid, tag: it.str("SeriesPrimaryImageTag")) }
+                if let ticks = it.int64("RunTimeTicks") { f.meta["runtime"] = String(ticks / 10_000_000) }
+                if let path = it.str("Path") { f.meta["filePath"] = path }
+                out.append(f)
+            }
+            start += items.count
+            if items.count < 500 || start >= (o.int("TotalRecordCount") ?? 0) { break }
+        }
+        return out
     }
 
     func playable(_ file: RemoteFile) async throws -> PlayableMedia {

@@ -53,6 +53,7 @@ final class LibraryStore: ObservableObject {
     @Published var lastResult: String?
     @Published var lastScan: Date? = UserDefaults.standard.object(forKey: "lib.lastScan") as? Date
     private var rescanPending = false
+    private var pendingForce = false
     private var enriching = false
 
     private let fileURL: URL = {
@@ -108,19 +109,15 @@ final class LibraryStore: ObservableObject {
 
     func clear() { items = []; save() }
 
-    /// Cloud drives throttle bursts of directory listings; retry with backoff instead of silently dropping the folder.
-    private func listRetrying(_ p: SourceProvider, _ dir: RemoteFile?, cloud: Bool) async throws -> [RemoteFile] {
-        var delay: UInt64 = 1_200_000_000
-        for attempt in 0..<5 {
-            if cloud { try? await Task.sleep(nanoseconds: 200_000_000) }
-            do { return try await p.list(dir) } catch {
-                if attempt == 4 || error is CancellationError { throw error }
-                progress = "网盘限流，稍等后重试 \(dir?.name ?? "")…"
-                try? await Task.sleep(nanoseconds: delay)
-                delay *= 2
-            }
+    /// Source deleted: drop its library folders and every file that came from it.
+    func removeSource(_ id: UUID) {
+        folders.removeAll { $0.sourceId == id }
+        items = items.compactMap { it in
+            var i = it
+            i.files.removeAll { $0.sourceId == id }
+            return i.files.isEmpty ? nil : i
         }
-        return []
+        save()
     }
 
     private func precachePosters(_ list: [LibraryItem]) {
@@ -154,6 +151,7 @@ final class LibraryStore: ObservableObject {
         }
         var changed = 0
         for it in todo {
+            await AppActivity.shared.waitUntilActive()
             guard let id = it.tmdbId, let d = await TMDB.details(id: id, tv: it.isTV) else { continue }
             guard let i = items.firstIndex(where: { $0.id == it.id }) else { continue }
             if !d.genres.isEmpty { items[i].genres = d.genres }
@@ -163,62 +161,30 @@ final class LibraryStore: ObservableObject {
             if changed % 20 == 0 { save() }
         }
         if changed > 0 { save() }
+        TMDBCache.shared.flush()
     }
 
     // MARK: scanning
 
-    private struct Found { var source: MediaSource; var folder: LibraryFolder; var file: RemoteFile; var parents: [String]; var subs: [RemoteFile] }
 
-    func scan() async {
-        if scanning { rescanPending = true; return }
+    /// force = list every folder now (重新扫描文件); otherwise a delta pass that only lists dirs past their TTL.
+    func scan(force: Bool = false) async {
+        if scanning { rescanPending = true; pendingForce = pendingForce || force; return }
+        var f = force
         repeat {
             rescanPending = false
-            await scanOnce()
+            await scanOnce(force: f)
+            f = pendingForce; pendingForce = false
         } while rescanPending
     }
 
-    private func scanOnce() async {
+    private func scanOnce(force: Bool) async {
         scanning = true
         defer { scanning = false; progress = "" }
-        var errors: [String] = []
-        var found: [Found] = []
-        var failedFolders = Set<String>()
-        for folder in folders {
-            guard let src = SourceStore.shared.source(folder.sourceId) else { continue }
-            let provider = SourceStore.shared.provider(for: src)
-            if !folder.dir.isDir {   // a single video added directly
-                var tagged = folder.dir
-                tagged.meta["folder"] = folder.id.uuidString
-                found.append(Found(source: src, folder: folder, file: tagged, parents: [], subs: []))
-                continue
-            }
-            var queue: [(RemoteFile, [String], Int)] = [(folder.dir, folder.dir.meta["root"] == "1" ? [] : [folder.dir.name], 0)]
-            let cloud = ![.smb, .webdav, .local, .emby, .jellyfin].contains(src.kind)
-            while !queue.isEmpty, found.count < 50000 {
-                let (dir, parents, depth) = queue.removeFirst()
-                progress = "正在扫描 \(dir.name)…"
-                let list: [RemoteFile]
-                do { list = try await listRetrying(provider, dir.meta["root"] == "1" ? nil : dir, cloud: cloud) } catch {
-                    errors.append("\(dir.name)：\(error.localizedDescription)")
-                    failedFolders.insert(folder.id.uuidString)
-                    continue
-                }
-                for f in list {
-                    if f.isDir {
-                        if depth < 12, !f.name.hasPrefix("@"), !["sample", "extras", "featurettes"].contains(f.name.lowercased()) {
-                            queue.append((f, [f.name] + parents, depth + 1))
-                        }
-                    } else if f.isVideo {
-                        let ln = f.name.lowercased()
-                        if ln.contains("sample") || ln.hasPrefix("._") { continue }
-                        var tagged = f
-                        tagged.meta["folder"] = folder.id.uuidString
-                        found.append(Found(source: src, folder: folder, file: tagged, parents: parents,
-                                           subs: SubtitleService.sidecars(for: f, in: list)))
-                    }
-                }
-            }
-        }
+        let outcome = await ScanCenter.shared.collect(folders, force: force) { [weak self] msg in self?.progress = msg }
+        let errors = outcome.errors
+        let found = outcome.found
+        let failedFolders = outcome.failedFolders
 
         // group
         struct ScanGroup { var parsed: ParsedName; var files: [LibraryFile]; var serverPoster: URL?; var serverOverview: String? }
@@ -230,6 +196,9 @@ final class LibraryStore: ObservableObject {
                 p = ParsedName(title: series, year: nil, season: f.file.meta["season"].flatMap { Int($0) }, episode: f.file.meta["episode"].flatMap { Int($0) })
             } else if f.file.meta["type"] == "Movie" {
                 p = ParsedName(title: f.file.name, year: f.file.year, season: nil, episode: nil)
+            } else if let t = f.titleOverride {             // BDMV / VIDEO_TS: the folder is the movie
+                p = NameParser.parse(t + ".mkv", parents: Array(f.parents.dropFirst()))
+                p.season = nil; p.episode = nil
             } else {
                 p = NameParser.parse(f.file.name, parents: f.parents)
             }
@@ -247,6 +216,7 @@ final class LibraryStore: ObservableObject {
         for key in order {
             guard let g = groups[key] else { continue }
             done += 1
+            await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
             progress = "正在匹配海报 \(done)/\(order.count)：\(g.parsed.title)"
             let isTV = g.parsed.isEpisode
             var item = LibraryItem(id: key, kind: isTV ? "tv" : "movie", title: g.parsed.title, year: g.parsed.year,
@@ -279,6 +249,16 @@ final class LibraryStore: ObservableObject {
                     }
                 }
             }
+            // new episodes of a show we already matched: fill titles from the (cached) season, once per season
+            if item.isTV, let tid = item.tmdbId {
+                let missing = Set(item.files.filter { $0.episodeTitle == nil && $0.episode != nil }.compactMap { $0.season })
+                for sn in missing {
+                    let eps = await TMDB.season(tvId: tid, season: sn)
+                    for i in item.files.indices where item.files[i].season == sn && item.files[i].episodeTitle == nil {
+                        if let e = item.files[i].episode, let info = eps[e] { item.files[i].episodeTitle = info.name; item.files[i].still = info.still }
+                    }
+                }
+            }
             newItems.append(item)
         }
         // keep what we already had from folders that could not be fully read this time (rate limits etc.)
@@ -295,6 +275,7 @@ final class LibraryStore: ObservableObject {
         lastScan = Date()
         UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
         save()
+        TMDBCache.shared.flush()
         Task { await enrich() }
         precachePosters(newItems)
         if newItems.isEmpty {

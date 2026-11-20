@@ -248,7 +248,7 @@ struct FolderView: View {
         loading = files.isEmpty
         error = nil
         do {
-            files = try await store.provider(for: currentSource).list(target.dir)
+            files = try await ScanCenter.shared.browse(currentSource, target.dir)
         } catch {
             self.error = error.localizedDescription
         }

@@ -162,10 +162,15 @@ enum TMDB {
         _ = try await HTTP.json(r)
     }
 
+    /// One search per show/movie, cached on disk by normalized title + year (rescans and relaunches don't hit TMDB again).
     static func search(title: String, year: Int?, tv: Bool) async -> TMDBMatch? {
-        if let m = await searchOne(title: title, year: year, tv: tv) { return m }
-        if year != nil, let m = await searchOne(title: title, year: nil, tv: tv) { return m }
-        return await searchOne(title: title, year: year, tv: !tv)
+        let key = TMDBCache.searchKey(title, year, tv)
+        if let hit = TMDBCache.shared.match(key) { return hit }
+        var m = await searchOne(title: title, year: year, tv: tv)
+        if m == nil, year != nil { m = await searchOne(title: title, year: nil, tv: tv) }
+        if m == nil { m = await searchOne(title: title, year: year, tv: !tv) }
+        if let m { TMDBCache.shared.setMatch(key, m) }
+        return m
     }
 
     private static func searchOne(title: String, year: Int?, tv: Bool) async -> TMDBMatch? {
@@ -191,13 +196,21 @@ enum TMDB {
     }
 
     /// Episode names/stills for a season.
+    /// Season details are fetched once per show+season and cached (3 days, so airing shows pick up new episodes).
     static func season(tvId: Int, season: Int) async -> [Int: (name: String, still: URL?, overview: String?)] {
+        let key = "\(tvId)|\(season)|\(AppSettings.shared.tmdbLanguage)"
+        if let c = TMDBCache.shared.season(key) {
+            return Dictionary(uniqueKeysWithValues: c.map { ($0.key, (name: $0.value.name, still: $0.value.still, overview: $0.value.overview)) })
+        }
         guard let r = request("/tv/\(tvId)/season/\(season)", [:]), let o = try? await HTTP.json(r) else { return [:] }
         var out: [Int: (name: String, still: URL?, overview: String?)] = [:]
+        var store: [Int: TMDBCache.Ep] = [:]
         for e in o.arr("episodes") {
             guard let n = e.int("episode_number") else { continue }
             out[n] = (e.str("name") ?? "", e.str("still_path").flatMap { URL(string: imageBase + "w300" + $0) }, e.str("overview"))
+            store[n] = TMDBCache.Ep(name: out[n]!.name, still: out[n]!.still, overview: out[n]!.overview)
         }
+        TMDBCache.shared.setSeason(key, store)
         return out
     }
 }
@@ -288,5 +301,52 @@ extension TMDB {
                             certification: cert)
         store(key, d)
         return d
+    }
+}
+
+
+// MARK: - TMDB disk cache
+
+final class TMDBCache: @unchecked Sendable {
+    static let shared = TMDBCache()
+    struct Ep: Codable { var name: String; var still: URL?; var overview: String? }
+    private struct SeasonEntry: Codable { var at: Date; var eps: [Int: Ep] }
+    private struct Disk: Codable { var matches: [String: TMDBMatch] = [:]; var seasons: [String: SeasonEntry] = [:] }
+    private var disk = Disk()
+    private var dirty = false
+    private let lock = NSLock()
+    private let url: URL = {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d.appendingPathComponent("tmdb-cache.json")
+    }()
+
+    private init() {
+        if let d = try? Data(contentsOf: url), let v = try? JSONDecoder().decode(Disk.self, from: d) { disk = v }
+    }
+
+    static func searchKey(_ title: String, _ year: Int?, _ tv: Bool) -> String {
+        let norm = title.lowercased().folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+        return "\(tv ? "tv" : "movie")|\(norm)|\(year ?? 0)|\(AppSettings.shared.tmdbLanguage)"
+    }
+
+    func match(_ k: String) -> TMDBMatch? { lock.lock(); defer { lock.unlock() }; return disk.matches[k] }
+    func setMatch(_ k: String, _ m: TMDBMatch) { lock.lock(); disk.matches[k] = m; dirty = true; lock.unlock() }
+
+    func season(_ k: String) -> [Int: Ep]? {
+        lock.lock(); defer { lock.unlock() }
+        guard let e = disk.seasons[k], Date().timeIntervalSince(e.at) < 3 * 86_400 else { return nil }
+        return e.eps
+    }
+    func setSeason(_ k: String, _ eps: [Int: Ep]) { lock.lock(); disk.seasons[k] = SeasonEntry(at: Date(), eps: eps); dirty = true; lock.unlock() }
+
+    func flush() {
+        lock.lock()
+        guard dirty else { lock.unlock(); return }
+        dirty = false
+        let snapshot = disk
+        lock.unlock()
+        if let d = try? JSONEncoder().encode(snapshot) { try? d.write(to: url, options: .atomic) }
     }
 }
