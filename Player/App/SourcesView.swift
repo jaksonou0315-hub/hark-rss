@@ -167,6 +167,11 @@ struct FolderView: View {
                 }
             } label: { label() }
             .buttonStyle(.plain)
+            .contextMenu {
+                if f.isVideo {
+                    Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
+                }
+            }
         }
     }
 

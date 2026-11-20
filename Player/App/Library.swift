@@ -47,6 +47,8 @@ final class LibraryStore: ObservableObject {
     @Published var items: [LibraryItem] = []
     @Published var scanning = false
     @Published var progress = ""
+    @Published var lastResult: String?
+    private var rescanPending = false
 
     private let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -96,25 +98,43 @@ final class LibraryStore: ObservableObject {
     private struct Found { var source: MediaSource; var folder: LibraryFolder; var file: RemoteFile; var parents: [String]; var subs: [RemoteFile] }
 
     func scan() async {
-        guard !scanning else { return }
+        if scanning { rescanPending = true; return }
+        repeat {
+            rescanPending = false
+            await scanOnce()
+        } while rescanPending
+    }
+
+    private func scanOnce() async {
         scanning = true
         defer { scanning = false; progress = "" }
+        var errors: [String] = []
         var found: [Found] = []
         for folder in folders {
             guard let src = SourceStore.shared.source(folder.sourceId) else { continue }
-            let provider = Providers.make(src)   // separate instance: no clash with browsing
+            let provider = SourceStore.shared.provider(for: src)
+            if !folder.dir.isDir {   // a single video added directly
+                var tagged = folder.dir
+                tagged.meta["folder"] = folder.id.uuidString
+                found.append(Found(source: src, folder: folder, file: tagged, parents: [], subs: []))
+                continue
+            }
             var queue: [(RemoteFile, [String], Int)] = [(folder.dir, [folder.dir.name], 0)]
             while !queue.isEmpty, found.count < 5000 {
                 let (dir, parents, depth) = queue.removeFirst()
                 progress = "正在扫描 \(dir.name)…"
-                guard let list = try? await provider.list(dir) else { continue }
+                let list: [RemoteFile]
+                do { list = try await provider.list(dir) } catch {
+                    errors.append("\(dir.name)：\(error.localizedDescription)"); continue
+                }
                 for f in list {
                     if f.isDir {
                         if depth < 6, !f.name.hasPrefix("@"), !["sample", "extras", "featurettes"].contains(f.name.lowercased()) {
                             queue.append((f, [f.name] + parents, depth + 1))
                         }
                     } else if f.isVideo {
-                        if f.size > 0 && f.size < 30_000_000 && src.kind != .emby && src.kind != .jellyfin { continue } // skip samples
+                        let ln = f.name.lowercased()
+                        if ln.contains("sample") || ln.hasPrefix("._") { continue }
                         var tagged = f
                         tagged.meta["folder"] = folder.id.uuidString
                         found.append(Found(source: src, folder: folder, file: tagged, parents: parents,
@@ -184,5 +204,10 @@ final class LibraryStore: ObservableObject {
         }
         items = newItems
         save()
+        if newItems.isEmpty {
+            lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
+        } else {
+            lastResult = "扫描完成：\(newItems.count) 部影片" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
+        }
     }
 }

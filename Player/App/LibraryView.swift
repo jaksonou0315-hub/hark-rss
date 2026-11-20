@@ -41,6 +41,13 @@ struct LibraryView: View {
                             .glass(in: Capsule())
                             .padding(.horizontal)
                         }
+                        if let r = library.lastResult, !library.scanning {
+                            Label(r, systemImage: library.items.isEmpty ? "exclamationmark.triangle" : "checkmark.circle")
+                                .font(.footnote).padding(12)
+                                .glass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .padding(.horizontal)
+                                .onTapGesture { library.lastResult = nil }
+                        }
                         if settings.tmdbKey.isEmpty && !library.items.isEmpty {
                             Label("在设置里填写 TMDB API Key，即可自动获取海报和简介", systemImage: "info.circle")
                                 .font(.footnote).padding(12)
@@ -83,7 +90,7 @@ struct LibraryView: View {
         VStack(spacing: 14) {
             Image(systemName: "film.stack").font(.system(size: 52)).foregroundStyle(.pink)
             Text("媒体库还是空的").font(.title3.bold())
-            Text("到「浏览」里添加 SMB、WebDAV、Emby、Jellyfin 或网盘，长按任意文件夹选择「添加到媒体库」，即可生成海报墙。")
+            Text("到「浏览」里添加 SMB、WebDAV、Emby、Jellyfin 或网盘，长按任意文件夹或视频选择「添加到媒体库」，即可生成海报墙。")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(28)

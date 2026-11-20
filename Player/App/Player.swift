@@ -98,12 +98,15 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     private func tick() {
-        isPlaying = player.isPlaying
+        if isPlaying != player.isPlaying { isPlaying = player.isPlaying }
         let st = player.state
-        buffering = (st == .opening || st == .buffering) && !player.isPlaying
-        timeMs = player.time.intValue
-        lengthMs = player.media?.length.intValue ?? 0
-        if lengthMs > 0 { position = player.position }
+        let buf = (st == .opening || st == .buffering) && !player.isPlaying
+        if buf != buffering { buffering = buf }
+        let nt = player.time.intValue
+        if nt != timeMs { timeMs = nt }
+        let nl = player.media?.length.intValue ?? 0
+        if nl != lengthMs { lengthMs = nl }
+        if lengthMs > 0, player.position != position { position = player.position }
         if st == .error, errorText == nil { errorText = "无法播放此文件（网络错误或格式不受支持）" }
         if st == .ended || (st == .stopped && timeMs > 0 && lengthMs > 0 && lengthMs - timeMs < 3000) {
             ended = true
@@ -177,8 +180,9 @@ final class PlayerController: NSObject, ObservableObject {
         let ai = (player.audioTrackIndexes as? [NSNumber]) ?? []
         let auds = zip(ai, an).map { TrackInfo(id: $0.int32Value, name: $1) }
         if auds != audioTracks { audioTracks = auds }
-        currentSub = player.currentVideoSubTitleIndex
-        currentAudio = player.currentAudioTrackIndex
+        let cs = player.currentVideoSubTitleIndex, ca = player.currentAudioTrackIndex
+        if cs != currentSub { currentSub = cs }
+        if ca != currentAudio { currentAudio = ca }
     }
 
     var searchQuery: String {
@@ -270,6 +274,7 @@ struct PlayerView: View {
     @State private var scrubValue: Float = 0
     @State private var showOnline = false
     @State private var landscape = false
+    @State private var trackSheet: TrackSheetKind?
 
     init(request: PlayRequest) { _c = StateObject(wrappedValue: PlayerController(request)) }
 
@@ -333,6 +338,10 @@ struct PlayerView: View {
         .onDisappear { c.stop(); setOrientation(portrait: true) }
         .onChange(of: c.ended) { _, ended in if ended { close() } }
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }
+        .sheet(item: $trackSheet, onDismiss: { scheduleHide() }) { k in
+            TrackSheet(c: c, kind: k, openOnline: { trackSheet = nil; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showOnline = true } })
+                .presentationDetents([.medium, .large])
+        }
         .animation(.easeInOut(duration: 0.2), value: showControls)
         .animation(.spring, value: c.toast)
     }
@@ -399,46 +408,14 @@ struct PlayerView: View {
     }
 
     private var subtitleMenu: some View {
-        Menu {
-            Section("字幕轨道") {
-                ForEach(c.subtitleTracks) { t in
-                    Button { c.selectSub(t.id) } label: {
-                        if t.id == c.currentSub { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
-                    }
-                }
-            }
-            Section("字幕延迟") {
-                Button("提前 0.5 秒") { c.shiftSubDelay(-500) }
-                Button("延后 0.5 秒") { c.shiftSubDelay(500) }
-            }
-            Section("AI 与翻译") {
-                Button { Task { await c.toggleAICaptions() } } label: {
-                    Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
-                }
-                if !c.loadedSubs.isEmpty {
-                    Menu {
-                        ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
-                            Button(s.name) { Task { await c.translateSub(s.url, name: s.name) } }
-                        }
-                    } label: { Label("系统翻译外挂字幕", systemImage: "translate") }
-                    .disabled(c.translating)
-                }
-            }
-            Button { showOnline = true } label: { Label("在线搜索字幕…", systemImage: "magnifyingglass") }
-        } label: {
+        Button { trackSheet = .subtitle; hideTask?.cancel() } label: {
             Image(systemName: "captions.bubble").frame(width: 40, height: 40)
         }
         .glass(in: Circle(), interactive: true)
     }
 
     private var audioMenu: some View {
-        Menu {
-            ForEach(c.audioTracks) { t in
-                Button { c.selectAudio(t.id) } label: {
-                    if t.id == c.currentAudio { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
-                }
-            }
-        } label: {
+        Button { trackSheet = .audio; hideTask?.cancel() } label: {
             Image(systemName: "waveform").frame(width: 40, height: 40)
         }
         .glass(in: Circle(), interactive: true)
@@ -462,7 +439,7 @@ struct PlayerView: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if !Task.isCancelled, c.isPlaying, !scrubbing { showControls = false }
+            if !Task.isCancelled, c.isPlaying, !scrubbing, trackSheet == nil, !showOnline { showControls = false }
         }
     }
     private func flash(_ s: String) { c.toast = s }
@@ -511,5 +488,69 @@ struct OnlineSubtitleSheet: View {
         loading = true
         results = await SubtitleService.search(query)
         loading = false
+    }
+}
+
+
+enum TrackSheetKind: String, Identifiable { case subtitle, audio; var id: String { rawValue } }
+
+struct TrackSheet: View {
+    @ObservedObject var c: PlayerController
+    let kind: TrackSheetKind
+    let openOnline: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if kind == .subtitle {
+                    Section("字幕轨道") {
+                        ForEach(c.subtitleTracks, id: \.id) { t in
+                            row(t.name, selected: t.id == c.currentSub) { c.selectSub(t.id) }
+                        }
+                    }
+                    Section("字幕延迟（当前 \(String(format: "%.1f", Double(c.subDelayMs) / 1000)) 秒）") {
+                        HStack {
+                            Button("提前 0.5 秒") { c.shiftSubDelay(-500) }.buttonStyle(.bordered)
+                            Spacer()
+                            Button("延后 0.5 秒") { c.shiftSubDelay(500) }.buttonStyle(.bordered)
+                        }
+                    }
+                    Section("AI 与翻译") {
+                        Button { Task { await c.toggleAICaptions() } } label: {
+                            Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
+                        }
+                        ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
+                            Button { Task { await c.translateSub(s.url, name: s.name) } } label: {
+                                Label("系统翻译：\(s.name)", systemImage: "translate").lineLimit(1)
+                            }.disabled(c.translating)
+                        }
+                    }
+                    Section {
+                        Button { openOnline() } label: { Label("在线搜索字幕…", systemImage: "magnifyingglass") }
+                    }
+                } else {
+                    Section("音轨") {
+                        ForEach(c.audioTracks, id: \.id) { t in
+                            row(t.name, selected: t.id == c.currentAudio) { c.selectAudio(t.id) }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(kind == .subtitle ? "字幕" : "音频")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func row(_ name: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(name).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            }
+        }
     }
 }
