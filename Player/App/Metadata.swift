@@ -191,3 +191,78 @@ enum TMDB {
         return out
     }
 }
+
+// MARK: - Rich details for the detail page
+
+struct TMDBCast: Hashable { var name: String; var role: String; var photo: URL? }
+
+struct TMDBDetails {
+    var title: String
+    var date: String?          // yyyy/M/d
+    var countries: [String]
+    var genres: [String]
+    var rating: Double?
+    var voteCount: Int?
+    var overview: String?
+    var logo: URL?
+    var posterHi: URL?
+    var totalEpisodes: Int?
+    var seasonCount: Int?
+    var runtime: Int?
+    var cast: [TMDBCast]
+    var tagline: String?
+}
+
+extension TMDB {
+    private static var cache: [String: TMDBDetails] = [:]
+
+    static func details(id: Int, tv: Bool) async -> TMDBDetails? {
+        let key = "\(tv ? "tv" : "movie")-\(id)"
+        if let c = cache[key] { return c }
+        let lang = AppSettings.shared.tmdbLanguage
+        let short = String(lang.prefix(2))
+        guard let r = request("/\(tv ? "tv" : "movie")/\(id)",
+                              ["append_to_response": tv ? "aggregate_credits,images" : "credits,images",
+                               "include_image_language": "\(short),en,null"]),
+              let o = try? await HTTP.json(r) else { return nil }
+        let rawDate = o.str(tv ? "first_air_date" : "release_date") ?? ""
+        var date: String?
+        let parts = rawDate.split(separator: "-").compactMap { Int($0) }
+        if parts.count == 3 { date = "\(parts[0])/\(parts[1])/\(parts[2])" }
+        let countryCodes: [String] = tv ? ((o["origin_country"] as? [String]) ?? [])
+                                        : o.arr("production_countries").compactMap { $0.str("iso_3166_1") }
+        let loc = Locale(identifier: lang)
+        let countries = countryCodes.prefix(2).map { loc.localizedString(forRegionCode: $0) ?? $0 }
+        let genres = o.arr("genres").compactMap { $0.str("name") }
+        // logo: prefer UI language, then English, then any
+        let logos = o.dict("images")?.arr("logos") ?? []
+        let logo = (logos.first { $0.str("iso_639_1") == short } ?? logos.first { $0.str("iso_639_1") == "en" } ?? logos.first)?
+            .str("file_path").flatMap { URL(string: imageBase + "w500" + $0) }
+        // cast
+        var cast: [TMDBCast] = []
+        if tv {
+            for c in (o.dict("aggregate_credits")?.arr("cast") ?? []).prefix(20) {
+                let role = c.arr("roles").first?.str("character") ?? ""
+                cast.append(TMDBCast(name: c.str("name") ?? "", role: role, photo: c.str("profile_path").flatMap { URL(string: imageBase + "w185" + $0) }))
+            }
+        } else {
+            for c in (o.dict("credits")?.arr("cast") ?? []).prefix(20) {
+                cast.append(TMDBCast(name: c.str("name") ?? "", role: c.str("character") ?? "", photo: c.str("profile_path").flatMap { URL(string: imageBase + "w185" + $0) }))
+            }
+        }
+        let d = TMDBDetails(title: o.str(tv ? "name" : "title") ?? "",
+                            date: date, countries: countries, genres: genres,
+                            rating: (o["vote_average"] as? NSNumber)?.doubleValue,
+                            voteCount: o.int("vote_count"),
+                            overview: o.str("overview"),
+                            logo: logo,
+                            posterHi: o.str("poster_path").flatMap { URL(string: imageBase + "w780" + $0) },
+                            totalEpisodes: o.int("number_of_episodes"),
+                            seasonCount: o.int("number_of_seasons"),
+                            runtime: o.int("runtime"),
+                            cast: cast,
+                            tagline: o.str("tagline"))
+        cache[key] = d
+        return d
+    }
+}
