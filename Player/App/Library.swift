@@ -30,6 +30,9 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var backdrop: URL?
     var rating: Double?
     var tmdbId: Int?
+    var genres: [String]? = nil
+    var certification: String? = nil
+    var countries: [String]? = nil
     var files: [LibraryFile]
     var added = Date()
 
@@ -48,7 +51,9 @@ final class LibraryStore: ObservableObject {
     @Published var scanning = false
     @Published var progress = ""
     @Published var lastResult: String?
+    @Published var lastScan: Date? = UserDefaults.standard.object(forKey: "lib.lastScan") as? Date
     private var rescanPending = false
+    private var enriching = false
 
     private let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -92,6 +97,25 @@ final class LibraryStore: ObservableObject {
     }
 
     func clear() { items = []; save() }
+
+    /// Fills genres / certification / countries for matched items that don't have them yet.
+    func enrich() async {
+        guard !enriching else { return }
+        enriching = true
+        defer { enriching = false }
+        let todo = items.filter { $0.tmdbId != nil && ($0.certification == nil || $0.genres == nil) }
+        var changed = 0
+        for it in todo {
+            guard let id = it.tmdbId, let d = await TMDB.details(id: id, tv: it.isTV) else { continue }
+            guard let i = items.firstIndex(where: { $0.id == it.id }) else { continue }
+            if !d.genres.isEmpty { items[i].genres = d.genres }
+            items[i].certification = d.certification ?? ""
+            items[i].countries = d.countries
+            changed += 1
+            if changed % 20 == 0 { save() }
+        }
+        if changed > 0 { save() }
+    }
 
     // MARK: scanning
 
@@ -179,6 +203,7 @@ final class LibraryStore: ObservableObject {
                 item.title = prev.title; item.originalTitle = prev.originalTitle; item.year = prev.year; item.overview = prev.overview
                 item.poster = prev.poster; item.backdrop = prev.backdrop; item.rating = prev.rating; item.tmdbId = prev.tmdbId
                 item.added = prev.added
+                item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries
                 for i in item.files.indices {
                     if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                         item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
@@ -188,6 +213,8 @@ final class LibraryStore: ObservableObject {
                 item.title = m.title.isEmpty ? item.title : m.title
                 item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
                 item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id
+                let gs = m.genreIds.compactMap { TMDB.genreName($0) }
+                if !gs.isEmpty { item.genres = gs }
                 if m.kind == "tv" {
                     item.kind = "tv"
                     for s in Set(item.files.compactMap { $0.season }) {
@@ -203,7 +230,10 @@ final class LibraryStore: ObservableObject {
             newItems.append(item)
         }
         items = newItems
+        lastScan = Date()
+        UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
         save()
+        Task { await enrich() }
         if newItems.isEmpty {
             lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
         } else {

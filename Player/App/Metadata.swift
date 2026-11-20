@@ -130,9 +130,18 @@ struct TMDBMatch: Codable, Hashable {
     var poster: URL?
     var backdrop: URL?
     var rating: Double?
+    var genreIds: [Int] = []
 }
 
 enum TMDB {
+    static func genreName(_ id: Int) -> String? {
+        let m: [Int: String] = [28: "动作", 12: "冒险", 16: "动画", 35: "喜剧", 80: "犯罪", 99: "纪录", 18: "剧情", 10751: "家庭",
+                                14: "奇幻", 36: "历史", 27: "恐怖", 10402: "音乐", 9648: "悬疑", 10749: "爱情", 878: "科幻",
+                                10770: "电视电影", 53: "惊悚", 10752: "战争", 37: "西部", 10759: "动作冒险", 10762: "儿童",
+                                10763: "新闻", 10764: "真人秀", 10765: "Sci-Fi & Fantasy", 10766: "肥皂剧", 10767: "脱口秀",
+                                10768: "War & Politics"]
+        return m[id]
+    }
     static let imageBase = "https://image.tmdb.org/t/p/"
 
     private static func request(_ path: String, _ query: [String: String]) -> URLRequest? {
@@ -177,7 +186,8 @@ enum TMDB {
                          overview: it.str("overview"),
                          poster: it.str("poster_path").flatMap { URL(string: imageBase + "w500" + $0) },
                          backdrop: it.str("backdrop_path").flatMap { URL(string: imageBase + "w1280" + $0) },
-                         rating: (it["vote_average"] as? NSNumber)?.doubleValue)
+                         rating: (it["vote_average"] as? NSNumber)?.doubleValue,
+                         genreIds: (it["genre_ids"] as? [Int]) ?? [])
     }
 
     /// Episode names/stills for a season.
@@ -211,6 +221,7 @@ struct TMDBDetails {
     var runtime: Int?
     var cast: [TMDBCast]
     var tagline: String?
+    var certification: String?
 }
 
 extension TMDB {
@@ -222,7 +233,7 @@ extension TMDB {
         let lang = AppSettings.shared.tmdbLanguage
         let short = String(lang.prefix(2))
         guard let r = request("/\(tv ? "tv" : "movie")/\(id)",
-                              ["append_to_response": tv ? "aggregate_credits,images" : "credits,images",
+                              ["append_to_response": tv ? "aggregate_credits,images,content_ratings" : "credits,images,release_dates",
                                "include_image_language": "\(short),en,null"]),
               let o = try? await HTTP.json(r) else { return nil }
         let rawDate = o.str(tv ? "first_air_date" : "release_date") ?? ""
@@ -250,6 +261,15 @@ extension TMDB {
                 cast.append(TMDBCast(name: c.str("name") ?? "", role: c.str("character") ?? "", photo: c.str("profile_path").flatMap { URL(string: imageBase + "w185" + $0) }))
             }
         }
+        var cert: String?
+        if tv {
+            let rs = o.dict("content_ratings")?.arr("results") ?? []
+            cert = (rs.first { $0.str("iso_3166_1") == "US" } ?? rs.first)?.str("rating")
+        } else {
+            let rs = o.dict("release_dates")?.arr("results") ?? []
+            let pick = rs.first { $0.str("iso_3166_1") == "US" } ?? rs.first
+            cert = pick?.arr("release_dates").compactMap { $0.str("certification") }.first { !$0.isEmpty }
+        }
         let d = TMDBDetails(title: o.str(tv ? "name" : "title") ?? "",
                             date: date, countries: countries, genres: genres,
                             rating: (o["vote_average"] as? NSNumber)?.doubleValue,
@@ -261,7 +281,8 @@ extension TMDB {
                             seasonCount: o.int("number_of_seasons"),
                             runtime: o.int("runtime"),
                             cast: cast,
-                            tagline: o.str("tagline"))
+                            tagline: o.str("tagline"),
+                            certification: cert)
         cache[key] = d
         return d
     }

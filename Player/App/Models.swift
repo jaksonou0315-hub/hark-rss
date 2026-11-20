@@ -196,10 +196,24 @@ final class AppSettings: ObservableObject {
 }
 
 enum Resume {
-    static func get(_ key: String) -> Int32 { Int32(UserDefaults.standard.integer(forKey: "resume." + key)) }
-    static func set(_ key: String, _ ms: Int32) { UserDefaults.standard.set(Int(ms), forKey: "resume." + key) }
-    static func clear(_ key: String) { UserDefaults.standard.removeObject(forKey: "resume." + key) }
+    private static let d = UserDefaults.standard
+    static func get(_ key: String) -> Int32 { Int32(d.integer(forKey: "resume." + key)) }
+    static func total(_ key: String) -> Int32 { Int32(d.integer(forKey: "resume.total." + key)) }
+    static func playedAt(_ key: String) -> Date? { d.object(forKey: "resume.at." + key) as? Date }
+    static func set(_ key: String, _ ms: Int32, total: Int32 = 0) {
+        d.set(Int(ms), forKey: "resume." + key)
+        if total > 0 { d.set(Int(total), forKey: "resume.total." + key) }
+        d.set(Date(), forKey: "resume.at." + key)
+        NotificationCenter.default.post(name: .resumeChanged, object: nil)
+    }
+    static func clear(_ key: String) {
+        d.removeObject(forKey: "resume." + key); d.removeObject(forKey: "resume.total." + key); d.removeObject(forKey: "resume.at." + key)
+        DispatchQueue.main.async { ItemMarks.shared.watched.insert(key) }
+        NotificationCenter.default.post(name: .resumeChanged, object: nil)
+    }
 }
+
+extension Notification.Name { static let resumeChanged = Notification.Name("hark.resumeChanged") }
 
 // MARK: - Keychain
 

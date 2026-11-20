@@ -26,15 +26,11 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            LibraryView()
-                .tabItem { Label("媒体库", systemImage: "square.grid.2x2") }
-                .tag(0)
-            SourcesView()
-                .tabItem { Label("浏览", systemImage: "externaldrive") }
-                .tag(1)
-            SettingsView()
-                .tabItem { Label("设置", systemImage: "gearshape") }
-                .tag(2)
+            Tab("媒体库", systemImage: "play.rectangle.fill", value: 0) { HomeView() }
+            Tab("文件源", systemImage: "folder", value: 1) { SourcesView(mode: .files) }
+            Tab("服务器", systemImage: "server.rack", value: 2) { SourcesView(mode: .servers) }
+            Tab("设置", systemImage: "gearshape", value: 3) { SettingsView() }
+            Tab(value: 4, role: .search) { LibrarySearchView() }
         }
         .minimizingTabBar()
         .fullScreenCover(item: $router.request) { r in

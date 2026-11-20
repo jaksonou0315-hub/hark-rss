@@ -115,7 +115,7 @@ final class NativePlayerModel: ObservableObject {
             timeObs = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main) { [weak self] t in
                 Task { @MainActor in
                     guard let self, let k = self.resumeKey, t.seconds > 10 else { return }
-                    Resume.set(k, Int32(t.seconds * 1000))
+                    Resume.set(k, Int32(t.seconds * 1000), total: Int32(((self.player.currentItem?.duration.seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0) * 1000))
                 }
             }
             endObs = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
@@ -135,7 +135,7 @@ final class NativePlayerModel: ObservableObject {
     func stop() {
         if let k = resumeKey, player.currentTime().seconds > 10 {
             let d = player.currentItem?.duration.seconds ?? 0
-            if d.isFinite, d - player.currentTime().seconds < 5 { Resume.clear(k) } else { Resume.set(k, Int32(player.currentTime().seconds * 1000)) }
+            if d.isFinite, d - player.currentTime().seconds < 5 { Resume.clear(k) } else { Resume.set(k, Int32(player.currentTime().seconds * 1000), total: Int32((d.isFinite ? d : 0) * 1000)) }
         }
         if let timeObs { player.removeTimeObserver(timeObs) }
         if let endObs { NotificationCenter.default.removeObserver(endObs) }

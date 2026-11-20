@@ -6,7 +6,19 @@ struct BrowseTarget: Hashable {
     var dir: RemoteFile?
 }
 
+enum SourcesMode { case all, files, servers
+    func includes(_ k: SourceKind) -> Bool {
+        switch self {
+        case .all: return true
+        case .servers: return k.isMediaServer
+        case .files: return !k.isMediaServer
+        }
+    }
+    var title: String { switch self { case .all: return "浏览"; case .files: return "文件源"; case .servers: return "服务器" } }
+}
+
 struct SourcesView: View {
+    var mode: SourcesMode = .all
     @EnvironmentObject var store: SourceStore
     @State private var editing: MediaSource?
     @State private var showAdd = false
@@ -17,7 +29,7 @@ struct SourcesView: View {
                 AuroraBackground()
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(store.sources) { s in
+                        ForEach(store.sources.filter { mode.includes($0.kind) }) { s in
                             NavigationLink(value: BrowseTarget(source: s, dir: nil)) {
                                 HStack(spacing: 14) {
                                     Image(systemName: s.kind.icon).font(.title2).foregroundStyle(s.kind.tint)
@@ -49,12 +61,12 @@ struct SourcesView: View {
                     .padding()
                 }
             }
-            .navigationTitle("浏览")
+            .navigationTitle(mode.title)
             .navigationDestination(for: BrowseTarget.self) { FolderView(target: $0) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        ForEach(SourceKind.allCases.filter { $0 != .local }) { k in
+                        ForEach(SourceKind.allCases.filter { $0 != .local && mode.includes($0) }) { k in
                             Button { editing = MediaSource(kind: k, name: k.title) } label: { Label(k.title, systemImage: k.icon) }
                         }
                     } label: { Image(systemName: "plus") }

@@ -159,7 +159,7 @@ final class PlayerController: NSObject, ObservableObject {
                 toast = "已从 \(Self.fmt(ms)) 继续播放"
             }
         } else if let k = playable?.resumeKey, timeMs > 0, Int(timeMs) % 5000 < 450 {
-            Resume.set(k, timeMs)
+            Resume.set(k, timeMs, total: lengthMs)
         }
         refreshTracks()
         if !didBadge, Date().timeIntervalSince(startedAt) > 1.0 { didBadge = true; computeBadges() }
@@ -274,7 +274,7 @@ final class PlayerController: NSObject, ObservableObject {
 
     func stop() {
         captioner.stop()
-        if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs) }
+        if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs, total: lengthMs) }
         timer?.invalidate()
         timer = nil
         player.stop()
