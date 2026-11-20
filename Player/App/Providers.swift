@@ -32,6 +32,8 @@ enum Providers {
         case .aliyun: return AliyunProvider(s)
         case .pan115: return Pan115Provider(s)
         case .baidu: return BaiduProvider(s)
+        case .quark: return QuarkTVProvider(s)
+        case .guangya: return GuangyaProvider(s)
         }
     }
 

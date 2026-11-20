@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
-    case local, smb, webdav, emby, jellyfin, aliyun, pan115, baidu
+    case local, smb, webdav, emby, jellyfin, aliyun, pan115, baidu, quark, guangya
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -14,6 +14,8 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .aliyun: return "阿里云盘"
         case .pan115: return "115 网盘"
         case .baidu: return "百度网盘"
+        case .quark: return "夸克网盘"
+        case .guangya: return "光鸭云盘"
         }
     }
     var icon: String {
@@ -26,6 +28,8 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .aliyun: return "icloud"
         case .pan115: return "cloud"
         case .baidu: return "cloud.circle"
+        case .quark: return "sparkles"
+        case .guangya: return "bird"
         }
     }
     var tint: Color {
@@ -38,9 +42,11 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .aliyun: return .orange
         case .pan115: return .cyan
         case .baidu: return .indigo
+        case .quark: return .blue
+        case .guangya: return .yellow
         }
     }
-    var needsQRLogin: Bool { self == .aliyun || self == .pan115 || self == .baidu }
+    var needsQRLogin: Bool { self == .aliyun || self == .pan115 || self == .baidu || self == .quark }
     var isMediaServer: Bool { self == .emby || self == .jellyfin }
 }
 
@@ -161,6 +167,11 @@ final class AppSettings: ObservableObject {
     @Published var preferredSubLang: String { didSet { d.set(preferredSubLang, forKey: "subLang") } }
     @Published var resumePlayback: Bool { didSet { d.set(resumePlayback, forKey: "resume") } }
     @Published var tmdbLanguage: String { didSet { d.set(tmdbLanguage, forKey: "tmdbLang") } }
+    @Published var aiSpeechLocale: String { didSet { d.set(aiSpeechLocale, forKey: "aiLocale") } }
+    @Published var aiTranslate: Bool { didSet { d.set(aiTranslate, forKey: "aiTranslate") } }
+    @Published var aiShowOriginal: Bool { didSet { d.set(aiShowOriginal, forKey: "aiShowOrig") } }
+    @Published var translateTarget: String { didSet { d.set(translateTarget, forKey: "trTarget") } }
+    @Published var bilingualSubs: Bool { didSet { d.set(bilingualSubs, forKey: "bilingual") } }
 
     private init() {
         tmdbKey = Keychain.get("tmdbKey") ?? ""
@@ -172,6 +183,11 @@ final class AppSettings: ObservableObject {
         preferredSubLang = d.string(forKey: "subLang") ?? "zh"
         resumePlayback = d.object(forKey: "resume") as? Bool ?? true
         tmdbLanguage = d.string(forKey: "tmdbLang") ?? "zh-CN"
+        aiSpeechLocale = d.string(forKey: "aiLocale") ?? "en-US"
+        aiTranslate = d.object(forKey: "aiTranslate") as? Bool ?? true
+        aiShowOriginal = d.object(forKey: "aiShowOrig") as? Bool ?? true
+        translateTarget = d.string(forKey: "trTarget") ?? "zh-Hans"
+        bilingualSubs = d.object(forKey: "bilingual") as? Bool ?? true
     }
 }
 

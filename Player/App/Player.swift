@@ -34,6 +34,10 @@ final class PlayerController: NSObject, ObservableObject {
     @Published var errorText: String?
     @Published var toast: String?
     @Published var ended = false
+    @Published var loadedSubs: [(name: String, url: URL)] = []
+    @Published var translating = false
+    let bridge = TranslationBridge()
+    let captioner = LiveCaptioner()
 
     private var timer: Timer?
     private var playable: PlayableMedia?
@@ -49,6 +53,7 @@ final class PlayerController: NSObject, ObservableObject {
         super.init()
         videoView.backgroundColor = .black
         player.drawable = videoView
+        captioner.bridge = bridge
     }
 
     func start() async {
@@ -67,13 +72,13 @@ final class PlayerController: NSObject, ObservableObject {
             // sidecar subtitles: server-provided URLs + files next to the video (downloaded and re-encoded to UTF-8)
             var subs: [URL] = []
             for u in p.subtitleFiles {
-                if let r = try? await HTTP.data(URLRequest(url: u)), let f = try? SubtitleService.saveTemp(r.0, name: u.lastPathComponent) { subs.append(f) }
+                if let r = try? await HTTP.data(URLRequest(url: u)), let f = try? SubtitleService.saveTemp(r.0, name: u.lastPathComponent) { subs.append(f); loadedSubs.append((u.lastPathComponent, f)) }
             }
             if AppSettings.shared.autoSidecar {
                 let side = request.extraSubtitles + SubtitleService.sidecars(for: request.file, in: request.siblings)
                 var seen = Set<String>()
                 for s in side where seen.insert(s.id).inserted {
-                    if let d = try? await provider.fetchData(s), let f = try? SubtitleService.saveTemp(d, name: s.name) { subs.append(f) }
+                    if let d = try? await provider.fetchData(s), let f = try? SubtitleService.saveTemp(d, name: s.name) { subs.append(f); loadedSubs.append((s.name, f)) }
                 }
             }
             pendingSubs = subs
@@ -165,6 +170,7 @@ final class PlayerController: NSObject, ObservableObject {
         do {
             let f = try await SubtitleService.fetch(s)
             player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            loadedSubs.append((s.title, f))
             toast = "已加载字幕：\(s.title)"
         } catch {
             toast = error.localizedDescription
@@ -184,7 +190,31 @@ final class PlayerController: NSObject, ObservableObject {
         toast = "字幕延迟 \(String(format: "%.1f", Double(subDelayMs) / 1000)) 秒"
     }
 
+    func toggleAICaptions() async {
+        if captioner.running { captioner.stop(); toast = "AI 字幕已关闭" }
+        else {
+            await captioner.start()
+            if let st = captioner.status { toast = st }
+        }
+    }
+
+    func translateSub(_ url: URL, name: String) async {
+        guard !translating else { return }
+        translating = true
+        toast = "正在用系统翻译翻译字幕…"
+        defer { translating = false }
+        do {
+            let f = try await SubtitleTranslator.translateFile(url, bridge: bridge, bilingual: AppSettings.shared.bilingualSubs)
+            player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            didPickTrack = true
+            toast = "已切换到翻译字幕"
+        } catch {
+            toast = error.localizedDescription
+        }
+    }
+
     func stop() {
+        captioner.stop()
         if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs) }
         timer?.invalidate()
         timer = nil
@@ -243,6 +273,7 @@ struct PlayerView: View {
                 .padding(24).glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                 .padding(40)
             }
+            LiveCaptionOverlay(captioner: c.captioner)
             if showControls { controls.transition(.opacity) }
             if let t = c.toast {
                 VStack {
@@ -256,6 +287,7 @@ struct PlayerView: View {
                 .task(id: t) { try? await Task.sleep(nanoseconds: 2_200_000_000); withAnimation { c.toast = nil } }
             }
         }
+        .modifier(TranslationHost(bridge: c.bridge))
         .preferredColorScheme(.dark)
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
@@ -340,6 +372,19 @@ struct PlayerView: View {
             Section("字幕延迟") {
                 Button("提前 0.5 秒") { c.shiftSubDelay(-500) }
                 Button("延后 0.5 秒") { c.shiftSubDelay(500) }
+            }
+            Section("AI 与翻译") {
+                Button { Task { await c.toggleAICaptions() } } label: {
+                    Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
+                }
+                if !c.loadedSubs.isEmpty {
+                    Menu {
+                        ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
+                            Button(s.name) { Task { await c.translateSub(s.url, name: s.name) } }
+                        }
+                    } label: { Label("系统翻译外挂字幕", systemImage: "translate") }
+                    .disabled(c.translating)
+                }
             }
             Button { showOnline = true } label: { Label("在线搜索字幕…", systemImage: "magnifyingglass") }
         } label: {

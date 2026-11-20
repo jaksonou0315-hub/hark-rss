@@ -193,6 +193,10 @@ struct SourceEditor: View {
     @State private var busy = false
     @State private var message: String?
     @State private var showLogin = false
+    @State private var smsSent = false
+    @State private var smsBusy = false
+    @State private var smsCode = ""
+    @State private var verificationId = ""
 
     private func binding(_ key: String) -> Binding<String> {
         Binding(get: { source.extra[key] ?? "" }, set: { source.extra[key] = $0 })
@@ -248,6 +252,43 @@ struct SourceEditor: View {
                     } header: { Text("百度网盘开放平台") } footer: {
                         Text("需要在 pan.baidu.com/union 申请应用，获得 AppKey / SecretKey 后点「扫码登录」。播放需在百度网盘端允许下载。")
                     }
+                case .quark:
+                    Section {
+                        Picker("播放线路", selection: binding("linkMode")) {
+                            Text("原画（下载直链）").tag("")
+                            Text("转码（夸克在线播放）").tag("streaming")
+                        }
+                    } header: { Text("夸克网盘") } footer: {
+                        Text("用夸克 App 扫码登录（TV 端授权，非官方接口）。原画画质最好；非会员原画可能限速，卡顿时换成「转码」。")
+                    }
+                case .guangya:
+                    Section {
+                        TextField("手机号，如 13800000000", text: binding("phone")).keyboardType(.phonePad)
+                        Button {
+                            Task { await sendGuangyaSMS() }
+                        } label: { HStack { Label(smsSent ? "重新发送验证码" : "发送验证码", systemImage: "message"); if smsBusy { Spacer(); ProgressView() } } }
+                        .disabled((source.extra["phone"] ?? "").trimmed.isEmpty || smsBusy)
+                        if smsSent {
+                            TextField("短信验证码", text: $smsCode).keyboardType(.numberPad)
+                            Button { Task { await guangyaSignIn() } } label: { Label("登录", systemImage: "person.badge.key") }
+                                .disabled(smsCode.trimmed.isEmpty || smsBusy)
+                        }
+                        if source.isLoggedIn { Label("已登录", systemImage: "checkmark.seal.fill").foregroundStyle(.green) }
+                    } header: { Text("光鸭云盘 · 短信登录") } footer: {
+                        Text("非官方接口，与 OpenList 光鸭驱动同一方式。登录后令牌会自动续期。")
+                    }
+                    Section {
+                        Picker("播放线路", selection: binding("linkMode")) {
+                            Text("视频点播（推荐）").tag("")
+                            Text("下载直链").tag("download")
+                        }
+                    } footer: { Text("光鸭的普通下载直链可能被限速；点播线路拿不到时会自动退回下载直链。") }
+                    Section {
+                        SecureField("refresh_token", text: $source.refreshToken)
+                        TextField("client_id（留空用默认）", text: binding("clientId")).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    } header: { Text("或：手动填写令牌") } footer: {
+                        Text("短信触发人机验证时，可在电脑浏览器登录光鸭网页版，用「光鸭凭证获取」脚本复制 refresh_token 粘贴到这里。")
+                    }
                 case .local:
                     EmptyView()
                 }
@@ -269,6 +310,11 @@ struct SourceEditor: View {
                     if busy { ProgressView() } else { Button("保存") { Task { await save() } }.disabled(source.name.isEmpty) }
                 }
             }
+            .onAppear {
+                if (source.kind == .quark || source.kind == .guangya), (source.extra["deviceId"] ?? "").count != 32 {
+                    source.extra["deviceId"] = Hash.randomHex32()
+                }
+            }
             .sheet(isPresented: $showLogin) {
                 QRLoginView(source: source) { updated in source = updated; store.upsert(updated) }
             }
@@ -281,6 +327,28 @@ struct SourceEditor: View {
         case .baidu: return !(source.extra["appKey"] ?? "").isEmpty && !(source.extra["secretKey"] ?? "").isEmpty
         default: return true
         }
+    }
+
+    private func sendGuangyaSMS() async {
+        smsBusy = true
+        defer { smsBusy = false }
+        do {
+            verificationId = try await GuangyaProvider.sendSMS(source, phone: source.extra["phone"] ?? "")
+            smsSent = true
+            message = "验证码已发送"
+        } catch { message = "发送失败：\(error.localizedDescription)" }
+    }
+
+    private func guangyaSignIn() async {
+        smsBusy = true
+        defer { smsBusy = false }
+        do {
+            source = try await GuangyaProvider.signIn(source, phone: source.extra["phone"] ?? "", code: smsCode.trimmed, verificationId: verificationId)
+            store.upsert(source)
+            message = "登录成功"
+            smsSent = false
+            smsCode = ""
+        } catch { message = "登录失败：\(error.localizedDescription)" }
     }
 
     private func save() async {
@@ -307,6 +375,7 @@ struct QRLoginView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var qrText: String?
     @State private var qrImageURL: URL?
+    @State private var qrData: Data?
     @State private var userCode: String?
     @State private var status = "正在获取二维码…"
     @State private var failed = false
@@ -317,6 +386,8 @@ struct QRLoginView: View {
                 Spacer()
                 Group {
                     if let qrText, let img = Self.qr(qrText) {
+                        Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
+                    } else if let qrData, let img = UIImage(data: qrData) {
                         Image(uiImage: img).interpolation(.none).resizable().scaledToFit()
                     } else if let qrImageURL {
                         AsyncImage(url: qrImageURL) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
@@ -358,6 +429,7 @@ struct QRLoginView: View {
             case .aliyun: try await aliyun()
             case .pan115: try await pan115()
             case .baidu: try await baidu()
+            case .quark: try await quark()
             default: break
             }
         } catch is CancellationError {
@@ -404,6 +476,24 @@ struct QRLoginView: View {
             case -2: throw AppError.message("已取消登录")
             default: try await Task.sleep(nanoseconds: 1_000_000_000)
             }
+        }
+    }
+
+    private func quark() async throws {
+        var s = source
+        if (s.extra["deviceId"] ?? "").count != 32 { s.extra["deviceId"] = Hash.randomHex32() }
+        let did = s.extra["deviceId"] ?? ""
+        let q = try await QuarkTVProvider.startQR(deviceId: did)
+        if let img = q.image { qrData = img } else { qrText = q.text }
+        status = "请使用夸克 App 扫码并确认授权"
+        let deadline = Date().addingTimeInterval(300)
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            if let code = await QuarkTVProvider.pollCode(queryToken: q.queryToken, deviceId: did) {
+                finish(try await QuarkTVProvider.token(s, code: code))
+                return
+            }
+            if Date() > deadline { throw AppError.message("二维码已过期") }
         }
     }
 

@@ -49,6 +49,25 @@ struct SettingsView: View {
                     Text("射手网：assrt.net 登录后在「用户面板」获取 Token；OpenSubtitles：opensubtitles.com › API Consumers 创建 Key。")
                 }
 
+                Section {
+                    Picker("影片原声语言", selection: $settings.aiSpeechLocale) {
+                        ForEach(AILanguages.speech, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    Toggle("用系统翻译翻成目标语言", isOn: $settings.aiTranslate)
+                    Toggle("同时显示原文", isOn: $settings.aiShowOriginal)
+                } header: { Text("AI 字幕") } footer: {
+                    Text("播放时在字幕菜单里打开「AI 实时字幕」：用 iPhone 本机语音识别听影片声音生成字幕。首次需要允许语音识别和「录制屏幕」（只用于读取本 App 的声音，不保存、不上传）。")
+                }
+
+                Section {
+                    Picker("翻译成", selection: $settings.translateTarget) {
+                        ForEach(AILanguages.targets, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    Toggle("翻译外挂字幕时保留原文（双语）", isOn: $settings.bilingualSubs)
+                } header: { Text("系统翻译") } footer: {
+                    Text("使用 iPhone 自带的「翻译」，语言包下载后可离线使用。可在「设置 › App › 翻译」管理已下载的语言。")
+                }
+
                 Section("播放") {
                     Toggle("记住播放进度", isOn: $settings.resumePlayback)
                 }
