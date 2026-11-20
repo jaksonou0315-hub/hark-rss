@@ -225,11 +225,14 @@ struct TMDBDetails {
 }
 
 extension TMDB {
-    private static var cache: [String: TMDBDetails] = [:]
+    nonisolated(unsafe) private static var cache: [String: TMDBDetails] = [:]
+    private static let cacheLock = NSLock()
+    private static func cached(_ k: String) -> TMDBDetails? { cacheLock.lock(); defer { cacheLock.unlock() }; return cache[k] }
+    private static func store(_ k: String, _ d: TMDBDetails) { cacheLock.lock(); cache[k] = d; cacheLock.unlock() }
 
     static func details(id: Int, tv: Bool) async -> TMDBDetails? {
         let key = "\(tv ? "tv" : "movie")-\(id)"
-        if let c = cache[key] { return c }
+        if let c = cached(key) { return c }
         let lang = AppSettings.shared.tmdbLanguage
         let short = String(lang.prefix(2))
         guard let r = request("/\(tv ? "tv" : "movie")/\(id)",
@@ -283,7 +286,7 @@ extension TMDB {
                             cast: cast,
                             tagline: o.str("tagline"),
                             certification: cert)
-        cache[key] = d
+        store(key, d)
         return d
     }
 }
