@@ -172,6 +172,8 @@ final class AppSettings: ObservableObject {
     @Published var aiShowOriginal: Bool { didSet { d.set(aiShowOriginal, forKey: "aiShowOrig") } }
     @Published var translateTarget: String { didSet { d.set(translateTarget, forKey: "trTarget") } }
     @Published var bilingualSubs: Bool { didSet { d.set(bilingualSubs, forKey: "bilingual") } }
+    @Published var nativeEngine: Bool { didSet { d.set(nativeEngine, forKey: "nativeEngine") } }
+    @Published var dolbyStereo: Bool { didSet { d.set(dolbyStereo, forKey: "dolbyStereo") } }
 
     private init() {
         tmdbKey = Keychain.get("tmdbKey") ?? ""
@@ -188,6 +190,8 @@ final class AppSettings: ObservableObject {
         aiShowOriginal = d.object(forKey: "aiShowOrig") as? Bool ?? true
         translateTarget = d.string(forKey: "trTarget") ?? "zh-Hans"
         bilingualSubs = d.object(forKey: "bilingual") as? Bool ?? true
+        nativeEngine = d.object(forKey: "nativeEngine") as? Bool ?? true
+        dolbyStereo = d.object(forKey: "dolbyStereo") as? Bool ?? true
     }
 }
 

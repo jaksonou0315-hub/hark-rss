@@ -38,7 +38,7 @@ struct RootView: View {
         }
         .minimizingTabBar()
         .fullScreenCover(item: $router.request) { r in
-            PlayerView(request: r)
+            PlayerEntry(request: r)
         }
     }
 }

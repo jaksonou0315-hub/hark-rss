@@ -68,8 +68,12 @@ struct SettingsView: View {
                     Text("使用 iPhone 自带的「翻译」，语言包下载后可离线使用。可在「设置 › App › 翻译」管理已下载的语言。")
                 }
 
-                Section("播放") {
+                Section {
                     Toggle("记住播放进度", isOn: $settings.resumePlayback)
+                    Toggle("MP4/MOV 用苹果原生内核", isOn: $settings.nativeEngine)
+                    Toggle("杜比音轨兼容模式", isOn: $settings.dolbyStereo)
+                } header: { Text("播放") } footer: {
+                    Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。兼容模式会把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。")
                 }
 
                 Section("媒体库") {

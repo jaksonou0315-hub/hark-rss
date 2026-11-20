@@ -15,7 +15,9 @@ struct TrackInfo: Identifiable, Hashable { var id: Int32; var name: String }
 
 @MainActor
 final class PlayerController: NSObject, ObservableObject {
-    let player = VLCMediaPlayer()
+    let player: VLCMediaPlayer = AppSettings.shared.dolbyStereo ? VLCMediaPlayer(options: ["--stereo-mode=1"]) : VLCMediaPlayer()
+    @Published var badges: [String] = []
+    private var didBadge = false
     let request: PlayRequest
     let videoView = UIView()
 
@@ -129,6 +131,7 @@ final class PlayerController: NSObject, ObservableObject {
             Resume.set(k, timeMs)
         }
         refreshTracks()
+        if !didBadge, Date().timeIntervalSince(startedAt) > 1.0 { didBadge = true; computeBadges() }
         if !didPickTrack, Date().timeIntervalSince(startedAt) > 1.5 {
             didPickTrack = true
             if let t = subtitleTracks.first(where: { $0.id >= 0 && SubtitleService.trackMatchesPreferred($0.name) }) {
@@ -139,6 +142,30 @@ final class PlayerController: NSObject, ObservableObject {
                 Task { await autoOnline() }
             }
         }
+    }
+
+    private func computeBadges() {
+        var b: [String] = []
+        let name = request.file.name
+        if DolbyBadges.nameHintsDV(name) { b.append("杜比视界") }
+        let infos = (player.media?.tracksInformation as? [[String: Any]]) ?? []
+        var audio: String?
+        for t in infos where (t[VLCMediaTracksInformationType] as? String) == VLCMediaTracksInformationTypeAudio {
+            if let c = (t[VLCMediaTracksInformationCodec] as? NSNumber)?.uint32Value, let a = DolbyBadges.audioBadge(fourcc: c) {
+                if audio == nil || a == "Dolby TrueHD" { audio = a }
+            }
+        }
+        if var a = audio {
+            if DolbyBadges.nameHintsAtmos(name), a != "DTS" { a = "杜比全景声" }
+            b.append(a)
+        }
+        badges = b
+        if b.contains("杜比视界") {
+            toast = EngineChooser.nativeExts.contains(request.file.ext)
+                ? "杜比视界：请在设置里打开「苹果原生内核」以正确显示色彩"
+                : "MKV 杜比视界色彩可能不准，建议用 MP4 版本（走原生内核）"
+        }
+        Task { try? await Task.sleep(nanoseconds: 5_000_000_000); badges = [] }
     }
 
     private func refreshTracks() {
@@ -274,6 +301,17 @@ struct PlayerView: View {
                 .padding(40)
             }
             LiveCaptionOverlay(captioner: c.captioner)
+            if !c.badges.isEmpty {
+                VStack {
+                    HStack(spacing: 8) {
+                        ForEach(c.badges, id: \.self) { b in
+                            Text(b).font(.caption.weight(.bold)).foregroundStyle(.white)
+                                .padding(.horizontal, 10).padding(.vertical, 6).glass(in: Capsule())
+                        }
+                    }.padding(.top, 64)
+                    Spacer()
+                }.allowsHitTesting(false).transition(.opacity)
+            }
             if showControls { controls.transition(.opacity) }
             if let t = c.toast {
                 VStack {
