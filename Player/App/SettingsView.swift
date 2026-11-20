@@ -61,6 +61,8 @@ struct SettingsView: View {
                     Text("播放时在字幕菜单里打开「AI 实时字幕」：用 iPhone 本机语音识别听影片声音生成字幕。首次需要允许语音识别和「录制屏幕」（只用于读取本 App 的声音，不保存、不上传）。")
                 }
 
+                AITranslateSettings()
+
                 Section {
                     Picker("翻译成", selection: $settings.translateTarget) {
                         ForEach(AILanguages.targets, id: \.0) { Text($0.1).tag($0.0) }

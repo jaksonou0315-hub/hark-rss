@@ -272,6 +272,24 @@ final class PlayerController: NSObject, ObservableObject {
         }
     }
 
+    func aiTranslateSub(_ url: URL, name: String) async {
+        guard !translating else { return }
+        translating = true
+        toast = "AI 翻译中…"
+        defer { translating = false }
+        do {
+            let f = try await AITranslator.translateFile(url, bilingual: AppSettings.shared.bilingualSubs) { [weak self] d, t in
+                if t > 1, d < t { self?.toast = "AI 翻译中 \(d * 100 / t)%" }
+            }
+            player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            loadedSubs.append(("AI 译 · " + name, f))
+            didPickTrack = true
+            toast = "已切换到 AI 翻译字幕"
+        } catch {
+            toast = error.localizedDescription
+        }
+    }
+
     func stop() {
         captioner.stop()
         if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs, total: lengthMs) }
@@ -345,7 +363,8 @@ struct PlayerView: View {
                     Spacer()
                 }.allowsHitTesting(false).transition(.opacity)
             }
-            if showControls { controls.transition(.opacity) }
+            if showControls && trackSheet == nil { controls.transition(.opacity) }
+            if let k = trackSheet { trackPanel(k) }
             if let t = c.toast {
                 VStack {
                     Text(t).font(.footnote.weight(.medium)).foregroundStyle(.white)
@@ -366,12 +385,35 @@ struct PlayerView: View {
         .onDisappear { c.stop(); setOrientation(portrait: true) }
         .onChange(of: c.ended) { _, ended in if ended { close() } }
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }
-        .sheet(item: $trackSheet, onDismiss: { scheduleHide() }) { k in
-            TrackSheet(c: c, kind: k, openOnline: { trackSheet = nil; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showOnline = true } })
-                .presentationDetents([.medium, .large])
-        }
         .animation(.easeInOut(duration: 0.2), value: showControls)
+        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: trackSheet)
         .animation(.spring, value: c.toast)
+    }
+
+    /// Small side panel (landscape: right quarter; portrait: lower part) so the video keeps playing in view.
+    private func trackPanel(_ k: TrackSheetKind) -> some View {
+        GeometryReader { g in
+            let land = g.size.width > g.size.height
+            ZStack(alignment: land ? .trailing : .bottom) {
+                Color.black.opacity(0.001).contentShape(Rectangle())
+                    .onTapGesture { closePanel() }
+                TrackSheet(c: c, kind: k, close: { closePanel() },
+                           openOnline: { closePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showOnline = true } })
+                    .frame(width: land ? min(max(g.size.width * 0.27, 300), 380) : g.size.width - 16,
+                           height: land ? g.size.height - 16 : max(g.size.height * 0.38, 300))
+                    .background(.ultraThinMaterial.opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .padding(8)
+                    .transition(.move(edge: land ? .trailing : .bottom).combined(with: .opacity))
+            }
+        }
+        .ignoresSafeArea(edges: .vertical)
+    }
+
+    private func closePanel() {
+        trackSheet = nil
+        scheduleHide()
     }
 
     private var controls: some View {
@@ -520,8 +562,9 @@ enum TrackSheetKind: String, Identifiable { case subtitle, audio; var id: String
 struct TrackSheet: View {
     @ObservedObject var c: PlayerController
     let kind: TrackSheetKind
+    let close: () -> Void
     let openOnline: () -> Void
-    @Environment(\.dismiss) private var dismiss
+    @State private var showAISettings = false
 
     var body: some View {
         NavigationStack {
@@ -544,9 +587,19 @@ struct TrackSheet: View {
                             Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
                         }
                         ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
+                            Button { Task { await c.aiTranslateSub(s.url, name: s.name) } } label: {
+                                Label("AI 翻译：\(s.name)", systemImage: "sparkles").lineLimit(1)
+                            }.disabled(c.translating)
                             Button { Task { await c.translateSub(s.url, name: s.name) } } label: {
                                 Label("系统翻译：\(s.name)", systemImage: "translate").lineLimit(1)
                             }.disabled(c.translating)
+                        }
+                        if c.loadedSubs.isEmpty {
+                            Text("内封字幕暂不能翻译。可先「在线搜索字幕」下载外挂字幕，再用 AI 翻译。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Button { showAISettings = true } label: {
+                            Label("AI 翻译设置（\(AITranslateConfig.shared.provider.title)）", systemImage: "key")
                         }
                     }
                     SubtitleStyleEditor()
@@ -561,9 +614,22 @@ struct TrackSheet: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 38)
+            .containerBackground(.clear, for: .navigation)
             .navigationTitle(kind == .subtitle ? "字幕" : "音频")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { close() } label: { Image(systemName: "xmark") }
+                }
+            }
+            .navigationDestination(isPresented: $showAISettings) {
+                Form { AITranslateSettings() }
+                    .scrollContentBackground(.hidden)
+                    .containerBackground(.clear, for: .navigation)
+                    .navigationTitle("AI 翻译").navigationBarTitleDisplayMode(.inline)
+            }
         }
         .preferredColorScheme(.dark)
     }
