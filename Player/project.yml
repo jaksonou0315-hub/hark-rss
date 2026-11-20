@@ -30,6 +30,7 @@ targets:
         product: VLCKitSPM
       - package: AMSMB2
         product: AMSMB2
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkplayer

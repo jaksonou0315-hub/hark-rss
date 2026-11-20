@@ -47,7 +47,18 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/HarkPlayer.app Payload/
-          ls Payload/HarkPlayer.app/Frameworks || true
+          mkdir -p Payload/HarkPlayer.app/Frameworks
+          # make sure every dynamic package framework is embedded
+          for F in build/Build/Products/Release-iphoneos/PackageFrameworks/*.framework; do
+            [ -e "$F" ] || continue
+            N=$(basename "$F")
+            [ -e "Payload/HarkPlayer.app/Frameworks/$N" ] || { echo "embedding $N"; cp -R "$F" Payload/HarkPlayer.app/Frameworks/; }
+          done
+          echo "== Frameworks:"; ls Payload/HarkPlayer.app/Frameworks
+          echo "== linked:"; otool -L Payload/HarkPlayer.app/HarkPlayer | grep rpath
+          for L in $(otool -L Payload/HarkPlayer.app/HarkPlayer | awk '/@rpath/{print $1}'); do
+            P="Payload/HarkPlayer.app/Frameworks/${L#@rpath/}"; [ -f "$P" ] || { echo "MISSING $L"; exit 1; }
+          done
           zip -qry HarkPlayer-unsigned.ipa Payload
           ls -la HarkPlayer-unsigned.ipa
       - uses: actions/upload-artifact@v4
