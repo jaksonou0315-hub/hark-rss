@@ -16,7 +16,7 @@ enum NameParser {
     private static let epOnly = re(#"(?<![A-Za-z0-9])(?:EP?|Episode[ ._]?)(\d{1,4})(?![0-9])"#)
     private static let cnSeason = re(#"第\s*([0-9一二三四五六七八九十]+)\s*季"#)
     private static let enSeason = re(#"(?<![A-Za-z])(?:Season[ ._]?|S)(\d{1,2})(?![0-9])"#)
-    private static let year = re(#"(?<![0-9])((?:19|20)\d{2})(?![0-9pPiIxX])"#)
+    private static let yearRe = re(#"(?<![0-9])((?:19|20)\d{2})(?![0-9pPiIxX])"#)
     private static let brackets = re(#"[\[【(（][^\]】)）]*[\]】)）]"#)
     private static let tags = re(#"(?<![A-Za-z0-9])(2160p|1080p|1080i|720p|480p|4k|uhd|bluray|blu-ray|bdrip|brrip|web-?dl|webrip|hdtv|hdrip|dvdrip|x26[45]|h\.?26[45]|hevc|avc|remux|hdr10?\+?|dv|dolby|dts(-hd)?|truehd|atmos|aac|ac3|ddp?5\.1|10bit|60fps|complete|国语|中字|双语|简繁|内封|内嵌)(?![A-Za-z0-9])"#)
     private static let leadingNumber = re(#"^\s*(\d{1,3})\s*$"#)
@@ -74,7 +74,7 @@ enum NameParser {
             if season == nil { season = group(m, 1, original).flatMap { cnNumber($0) } }
             markCut(m)
         }
-        if let m = first(year, original) {
+        if let m = first(yearRe, original) {
             year = group(m, 1, original).flatMap { Int($0) }
             // a leading year ("2012.mkv") is a title, not a year
             if let r = Range(m.range, in: original), r.lowerBound != original.startIndex { markCut(m) } else if original.count <= 5 { year = nil }

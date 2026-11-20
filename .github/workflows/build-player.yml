@@ -38,7 +38,8 @@ jobs:
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             -clonedSourcePackagesDirPath build/SourcePackages \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee build.log | grep -E "error:|BUILD" || true
-          test -d build/Build/Products/Release-iphoneos/HarkPlayer.app
+          grep -q "BUILD SUCCEEDED" build.log
+          test -f build/Build/Products/Release-iphoneos/HarkPlayer.app/HarkPlayer
       - name: Show errors
         if: failure()
         run: grep -n "error:" build.log | sort -u | head -80 || true
