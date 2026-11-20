@@ -87,7 +87,7 @@ final class SubtitleStyle: ObservableObject {
         ]
         if !font.isEmpty { attrs[kCMTextMarkupAttribute_FontFamilyName as String] = font }
         attrs[kCMTextMarkupAttribute_BackgroundColorARGB as String] = [background ? backgroundOpacity : 0.0, 0.0, 0.0, 0.0]
-        return AVTextStyleRule.textStyleRules(from: [attrs]) ?? []
+        return AVTextStyleRule.textStyleRules(fromPropertyList: [attrs]) ?? []
     }
 
     // MARK: Imported fonts
