@@ -368,7 +368,8 @@ final class ScanCenter: ObservableObject {
                 switch kind {
                 case .tooManyRequests(let secs) where attempt < 2:
                     await g.onThrottled()
-                    let ms = secs.map { min($0, 20) * 1000 } ?? (await g.backoffMs(retry: attempt))
+                    var ms = await g.backoffMs(retry: attempt)
+                    if let secs { ms = min(secs, 20) * 1000 }
                     try await Task.sleep(for: .milliseconds(ms))
                 case .timeout where attempt < 2, .network where attempt < 2:
                     await g.onError()
