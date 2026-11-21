@@ -49,7 +49,33 @@ struct ContinueEntry: Identifiable {
 enum Groupings {
     static func isDoc(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { $0.contains("纪录") || $0 == "Documentary" } }
     static func isVariety(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { ["真人秀", "脱口秀", "Reality", "Talk"].contains($0) } }
-    static func isOther(_ i: LibraryItem) -> Bool { i.tmdbId == nil }
+    static func isOther(_ i: LibraryItem) -> Bool { i.tmdbId == nil && !isBL(i) }
+    static func isAnimation(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { $0 == "动画" || $0 == "Animation" || $0 == "動畫" } }
+
+    /// 手动归类（详情页 ⋯）：true = 归入 BL，false = 不归入 BL
+    static func blOverride(_ id: String) -> Bool? {
+        (UserDefaults.standard.dictionary(forKey: "lib.blOverride") as? [String: Bool])?[id]
+    }
+    static func setBLOverride(_ id: String, _ v: Bool?) {
+        var d = (UserDefaults.standard.dictionary(forKey: "lib.blOverride") as? [String: Bool]) ?? [:]
+        d[id] = v
+        UserDefaults.standard.set(d, forKey: "lib.blOverride")
+    }
+    private static let blKeywords: Set<String> = [
+        "boys' love", "boys love", "boy's love", "boys' love (bl)", "bl", "bl drama", "bl series", "bl manga", "bl anime",
+        "yaoi", "shounen ai", "shounen-ai", "shōnen-ai", "danmei", "gay romance", "gay love", "gay couple",
+    ]
+    private static let blRegex = try! NSRegularExpression(pattern: "(^|[^A-Za-z])BL([^A-Za-z]|$)|耽美|boys'? ?love|yaoi|腐剧", options: [.caseInsensitive])
+    static func isBL(_ i: LibraryItem) -> Bool {
+        if let o = blOverride(i.id) { return o }
+        if (i.keywords ?? []).contains(where: { blKeywords.contains($0) || $0.contains("boys' love") || $0.contains("yaoi") }) { return true }
+        // file / folder names (path-based drives keep folder names in the path)
+        for f in i.files.prefix(3) {
+            let s = f.file.path.contains("/") ? f.file.path : f.file.name
+            if blRegex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil { return true }
+        }
+        return false
+    }
 
     static func genres(_ items: [LibraryItem]) -> [Bucket] {
         var map: [String: [LibraryItem]] = [:]
@@ -113,6 +139,9 @@ struct HomeShelves {
     var recent: [LibraryItem] = []
     var movies: [LibraryItem] = []
     var shows: [LibraryItem] = []
+    var animeMovies: [LibraryItem] = []
+    var anime: [LibraryItem] = []
+    var bl: [LibraryItem] = []
     var docs: [LibraryItem] = []
     var variety: [LibraryItem] = []
     var other: [LibraryItem] = []
@@ -126,10 +155,15 @@ struct HomeShelves {
         var h = HomeShelves()
         let recent = items.sorted { $0.added > $1.added }
         h.recent = recent
-        h.movies = recent.filter { !$0.isTV }
-        h.shows = recent.filter { $0.isTV && !Groupings.isVariety($0) && !Groupings.isDoc($0) }
-        h.docs = recent.filter(Groupings.isDoc)
-        h.variety = recent.filter(Groupings.isVariety)
+        let blSet = Set(recent.filter(Groupings.isBL).map(\.id))
+        let notBL = recent.filter { !blSet.contains($0.id) }
+        h.bl = recent.filter { blSet.contains($0.id) }
+        h.movies = notBL.filter { !$0.isTV && !Groupings.isOther($0) && !Groupings.isAnimation($0) && !Groupings.isDoc($0) }
+        h.animeMovies = notBL.filter { !$0.isTV && Groupings.isAnimation($0) }
+        h.anime = notBL.filter { $0.isTV && Groupings.isAnimation($0) && !Groupings.isVariety($0) }
+        h.shows = notBL.filter { $0.isTV && !Groupings.isOther($0) && !Groupings.isVariety($0) && !Groupings.isDoc($0) && !Groupings.isAnimation($0) }
+        h.docs = notBL.filter { Groupings.isDoc($0) && !Groupings.isAnimation($0) }
+        h.variety = notBL.filter(Groupings.isVariety)
         h.other = recent.filter(Groupings.isOther)
         h.unwatched = Groupings.unwatched(recent, marks: marks)
         h.genres = Groupings.genres(items)
@@ -186,9 +220,12 @@ struct HomeView: View {
                             continueRow
                             shelfRow("最近添加", shelves.recent)
                             shelfRow("电影", shelves.movies)
+                            shelfRow("动画电影", shelves.animeMovies)
                             shelfRow("电视剧", shelves.shows)
-                            shelfRow("纪录片", shelves.docs)
+                            shelfRow("动画", shelves.anime)
                             shelfRow("综艺", shelves.variety)
+                            shelfRow("纪录片", shelves.docs)
+                            shelfRow("BL", shelves.bl)
                             shelfRow("其他", shelves.other)
                             shelfRow("未观看", shelves.unwatched)
                             bucketRow("类型", shelves.genres)

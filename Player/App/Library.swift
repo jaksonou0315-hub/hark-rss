@@ -34,6 +34,7 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var genres: [String]? = nil
     var certification: String? = nil
     var countries: [String]? = nil
+    var keywords: [String]? = nil     // TMDB keywords (lowercased English), used for the BL shelf
     var files: [LibraryFile]
     var added = Date()
 
@@ -172,7 +173,7 @@ final class LibraryStore: ObservableObject {
         let srcs = SourceStore.shared.sources
         let prefetchOff = Set(srcs.filter { $0.extra["prefetch"] == "0" }.map(\.id))
         let todo = items.filter { it in
-            it.tmdbId != nil && (it.certification == nil || it.genres == nil)
+            it.tmdbId != nil && (it.certification == nil || it.genres == nil || it.keywords == nil)
                 && !(it.files.allSatisfy { prefetchOff.contains($0.sourceId) })
         }
         var changed = 0
@@ -183,6 +184,7 @@ final class LibraryStore: ObservableObject {
             if !d.genres.isEmpty { items[i].genres = d.genres }
             items[i].certification = d.certification ?? ""
             items[i].countries = d.countries
+            items[i].keywords = d.keywords
             changed += 1
             if changed % 20 == 0 { save() }
         }
@@ -359,7 +361,7 @@ final class LibraryStore: ObservableObject {
                     item.title = prev.title; item.originalTitle = prev.originalTitle; item.year = prev.year; item.overview = prev.overview
                     item.poster = prev.poster; item.backdrop = prev.backdrop; item.rating = prev.rating; item.tmdbId = prev.tmdbId
                     item.kind = prev.kind
-                    item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries
+                    item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries; item.keywords = prev.keywords
                     for i in item.files.indices {
                         if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                             item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
@@ -410,14 +412,14 @@ final class LibraryStore: ObservableObject {
             it.kind = m.kind
             let gs = m.genreIds.compactMap { TMDB.genreName($0) }
             it.genres = gs.isEmpty ? nil : gs
-            it.certification = nil; it.countries = nil
+            it.certification = nil; it.countries = nil; it.keywords = nil
             for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
         } else {
             let first = it.files.first
             let p = first.map { NameParser.parse($0.file.name, parents: []) }
             it.title = p?.title ?? it.title; it.year = p?.year; it.originalTitle = nil
             it.overview = first?.file.overview; it.poster = first?.file.posterURL; it.backdrop = nil
-            it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil
+            it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil; it.keywords = nil
         }
         items[j] = it
         save()
