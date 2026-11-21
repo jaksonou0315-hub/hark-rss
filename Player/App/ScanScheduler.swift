@@ -322,6 +322,7 @@ final class ScanCenter: ObservableObject {
         switch s.kind {
         case .local, .smb, .emby, .jellyfin: ms = 0
         case .webdav: ms = 150
+        case .guangya: ms = 150
         default: ms = 300        // cloud drives: be gentle by default
         }
         let g = SourceGate(minDelayMs: ms)
@@ -337,6 +338,7 @@ final class ScanCenter: ObservableObject {
     private func workers(_ s: MediaSource) -> Int {
         switch s.kind {
         case .local, .smb: return 3
+        case .guangya: return 3
         default: return 2
         }
     }
@@ -392,7 +394,7 @@ final class ScanCenter: ObservableObject {
 
     /// Crawl every library folder and return the videos found.
     /// force = list every dir now; otherwise only dirs whose snapshot is missing or past its adaptive TTL.
-    func collect(_ folders: [LibraryFolder], force: Bool, counts: @escaping (Int, Int) -> Void = { _, _ in },
+    func collect(_ folders: [LibraryFolder], force: Bool, counts: @escaping (Int, Int, Int) -> Void = { _, _, _ in },
                  progress: @escaping (String) -> Void) async -> ScanOutcome {
         var out = ScanOutcome()
         let bySource = Dictionary(grouping: folders, by: \.sourceId)
@@ -405,7 +407,8 @@ final class ScanCenter: ObservableObject {
             }
             let run = CrawlRun(center: self, source: src, db: db(sid), gate: gate(src), force: force, progress: progress)
             let base = out.found.count
-            run.counts = { found, left in counts(base + found, left) }
+            let listedBase = out.listed + out.skipped
+            run.counts = { found, left, read in counts(base + found, left, listedBase + read) }
             for f in fs where f.dir.isDir {
                 run.enqueue(dir: f.dir.meta["root"] == "1" ? nil : f.dir, depth: 0, type: .userTriggered)
             }
@@ -539,7 +542,7 @@ private final class CrawlRun {
     var listed = 0
     var skipped = 0
     var videos = 0
-    var counts: (Int, Int) -> Void = { _, _ in }
+    var counts: (Int, Int, Int) -> Void = { _, _, _ in }
 
     init(center: ScanCenter, source: MediaSource, db: SnapshotDB, gate: SourceGate, force: Bool, progress: @escaping (String) -> Void) {
         self.center = center; self.source = source; self.db = db; self.gate = gate; self.force = force; self.progress = progress
@@ -570,7 +573,7 @@ private final class CrawlRun {
     }
 
     func run() async {
-        let n = source.kind == .local || source.kind == .smb ? 3 : 2
+        let n = [.local, .smb, .guangya].contains(source.kind) ? 3 : 2
         await withTaskGroup(of: Void.self) { g in
             for _ in 0..<n { g.addTask { await self.worker() } }
         }
@@ -670,7 +673,7 @@ private final class CrawlRun {
     private func expand(_ job: ScanJob, _ children: [RemoteFile]) {
         if job.discLevel == 0 { videos += children.filter { !$0.isDir && $0.isVideo && !ScanRules.skipFile($0) }.count }
         else if children.contains(where: { !$0.isDir && $0.isVideo }) && job.discLevel == 2 { videos += 1 }
-        defer { counts(videos, pending.count + max(0, inFlight.count - 1)) }
+        defer { counts(videos, pending.count + max(0, inFlight.count - 1), listed + skipped) }
         for c in children where c.isDir {
             if job.discLevel == 1 {
                 if c.name.lowercased() == "stream" { enqueue(dir: c, depth: job.depth + 1, type: .backgroundDelta, discLevel: 2) }

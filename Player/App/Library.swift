@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftUI
 
 struct LibraryFolder: Codable, Identifiable, Hashable {
@@ -60,11 +61,14 @@ final class LibraryStore: ObservableObject {
     private var pendingForce = false
     var scanFound = 0 { didSet { pushLine() } }          // video files found so far
     var scanDone = 0 { didSet { pushLine() } }           // files in library with poster matched (or tried)
-    var foldersLeft = 0
+    var foldersLeft = 0 { didSet { if foldersLeft != oldValue { pushLine() } } }
+    var foldersRead = 0 { didSet { if foldersRead / 5 != oldValue / 5 { pushLine() } } }
     var matching = false
     var countLine: String? {
         guard scanning else { return nil }
-        return "已找到 \(scanFound) 个文件，已完成 \(min(scanDone, scanFound)) 个，剩余 \(max(0, scanFound - scanDone)) 个"
+        let main = "已找到 \(scanFound) 个文件，已完成 \(min(scanDone, scanFound)) 个，剩余 \(max(0, scanFound - scanDone)) 个"
+        guard crawlActive else { return main }
+        return main + "\n正在读取文件夹：已读 \(foldersRead) 个，待读 \(foldersLeft) 个"
     }
     private func pushLine() {
         let l = countLine
@@ -200,7 +204,7 @@ final class LibraryStore: ObservableObject {
         } while rescanPending
     }
 
-    private var crawlActive = false
+    private var crawlActive = false { didSet { pushLine() } }
     private var matchTried = Set<String>()
     /// New items still waiting for their poster: kept out of the library until matched (or the match fails).
     private var staged: [String: LibraryItem] = [:]
@@ -232,12 +236,18 @@ final class LibraryStore: ObservableObject {
 
     private func scanOnce(force: Bool) async {
         scanning = true
-        scanFound = 0; scanDone = 0; foldersLeft = 0; matching = true
+        scanFound = 0; scanDone = 0; foldersLeft = 0; foldersRead = 0; matching = true
         crawlActive = true
         matchTried = []
         staged = [:]; stagedOrder = []
         knownIds = Set(items.map(\.id))
-        defer { scanning = false; matching = false; crawlActive = false; progress = ""; pushLine() }
+        // keep reading folders for the ~30 s iOS allows after leaving the app
+        var bg = UIBackgroundTaskIdentifier.invalid
+        bg = UIApplication.shared.beginBackgroundTask(withName: "library-scan") { UIApplication.shared.endBackgroundTask(bg); bg = .invalid }
+        defer {
+            scanning = false; matching = false; crawlActive = false; progress = ""; pushLine()
+            if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) }
+        }
         let before = Set(items.flatMap { $0.files.map(\.id) })
         let folderSnapshot = folders
 
@@ -260,8 +270,9 @@ final class LibraryStore: ObservableObject {
         }
         let matcher = Task { @MainActor [weak self] in await self?.matchLoop() }
 
-        let outcome = await ScanCenter.shared.collect(folders, force: force, counts: { [weak self] found, left in
+        let outcome = await ScanCenter.shared.collect(folders, force: force, counts: { [weak self] found, left, read in
             self?.foldersLeft = left
+            self?.foldersRead = read
             if let self, found > self.scanFound { self.scanFound = found }
         }) { [weak self] msg in self?.progress = msg }
         publisher.cancel()

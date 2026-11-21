@@ -154,7 +154,7 @@ struct ScanCountLine: View {
     @ObservedObject var live: ScanLive
     var body: some View {
         if let line = live.line {
-            Text(line).font(.footnote).foregroundStyle(.white.opacity(0.75)).monospacedDigit()
+            Text(line).font(.footnote).foregroundStyle(.white.opacity(0.75)).monospacedDigit().multilineTextAlignment(.center)
         }
     }
 }

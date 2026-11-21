@@ -258,14 +258,22 @@ final class GuangyaProvider: SourceProvider {
     func list(_ dir: RemoteFile?) async throws -> [RemoteFile] {
         let parent = dir?.path ?? ""
         var out: [RemoteFile] = []
+        var seen = Set<String>()
         var page = 0
         let size = 100
-        while page < 1000 {
+        var pageCap = 0          // what the server actually returns per page (may be capped below `size`)
+        var stale = 0
+        while page < 2000 {
             let o = try await post("/userres/v1/file/get_file_list", ["parentId": parent, "page": page, "pageSize": size, "orderBy": 3, "sortType": 1])
             let data = o.dict("data") ?? [:]
             let list = data.arr("list")
+            if list.isEmpty { break }
+            pageCap = max(pageCap, list.count)
+            var fresh = 0
             for it in list {
                 let id = it.str("fileId") ?? ""
+                guard seen.insert(id).inserted else { continue }
+                fresh += 1
                 var f = RemoteFile(id: id, name: it.str("fileName") ?? "", path: id, isDir: it.int("resType") == 2, size: it.int64("fileSize") ?? 0)
                 f.meta["gcid"] = it.str("gcid") ?? ""
                 f.meta["fileType"] = it.str("fileType") ?? ""
@@ -274,7 +282,10 @@ final class GuangyaProvider: SourceProvider {
             }
             let total = data.int("total") ?? 0
             page += 1
-            if list.count < size || (total > 0 && out.count >= total) { break }
+            if total > 0 && out.count >= total { break }
+            if total == 0 && list.count < pageCap { break }
+            // a page with nothing new (1-based paging repeats page 0, or the server ignores `page`): allow one, then stop
+            if fresh == 0 { stale += 1; if stale >= 2 { break } } else { stale = 0 }
         }
         return Providers.sortFiles(out)
     }
