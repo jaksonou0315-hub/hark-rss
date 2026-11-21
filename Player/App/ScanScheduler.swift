@@ -387,7 +387,8 @@ final class ScanCenter: ObservableObject {
 
     /// Crawl every library folder and return the videos found.
     /// force = list every dir now; otherwise only dirs whose snapshot is missing or past its adaptive TTL.
-    func collect(_ folders: [LibraryFolder], force: Bool, progress: @escaping (String) -> Void) async -> ScanOutcome {
+    func collect(_ folders: [LibraryFolder], force: Bool, counts: @escaping (Int, Int) -> Void = { _, _ in },
+                 progress: @escaping (String) -> Void) async -> ScanOutcome {
         var out = ScanOutcome()
         let bySource = Dictionary(grouping: folders, by: \.sourceId)
         for (sid, fs) in bySource {
@@ -398,6 +399,8 @@ final class ScanCenter: ObservableObject {
                 continue
             }
             let run = CrawlRun(center: self, source: src, db: db(sid), gate: gate(src), force: force, progress: progress)
+            let base = out.found.count
+            run.counts = { found, left in counts(base + found, left) }
             for f in fs where f.dir.isDir {
                 run.enqueue(dir: f.dir.meta["root"] == "1" ? nil : f.dir, depth: 0, type: .userTriggered)
             }
@@ -514,6 +517,8 @@ private final class CrawlRun {
     var errors: [String] = []
     var listed = 0
     var skipped = 0
+    var videos = 0
+    var counts: (Int, Int) -> Void = { _, _ in }
 
     init(center: ScanCenter, source: MediaSource, db: SnapshotDB, gate: SourceGate, force: Bool, progress: @escaping (String) -> Void) {
         self.center = center; self.source = source; self.db = db; self.gate = gate; self.force = force; self.progress = progress
@@ -642,6 +647,9 @@ private final class CrawlRun {
     }
 
     private func expand(_ job: ScanJob, _ children: [RemoteFile]) {
+        if job.discLevel == 0 { videos += children.filter { !$0.isDir && $0.isVideo && !ScanRules.skipFile($0) }.count }
+        else if children.contains(where: { !$0.isDir && $0.isVideo }) && job.discLevel == 2 { videos += 1 }
+        defer { counts(videos, pending.count + max(0, inFlight.count - 1)) }
         for c in children where c.isDir {
             if job.discLevel == 1 {
                 if c.name.lowercased() == "stream" { enqueue(dir: c, depth: job.depth + 1, type: .backgroundDelta, discLevel: 2) }

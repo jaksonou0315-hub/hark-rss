@@ -140,9 +140,6 @@ struct HomeView: View {
                             shelfRow("其他", recent.filter(Groupings.isOther))
                             shelfRow("未观看", Groupings.unwatched(recent, marks: marks))
                             bucketRow("类型", Groupings.genres(library.items))
-                            bucketRow("评分", Groupings.ratings(library.items))
-                            bucketRow("发行日期", Groupings.decades(library.items))
-                            bucketRow("分级", Groupings.certifications(library.items))
                             stats
                         }
                         .padding(.bottom, 120)
@@ -300,6 +297,9 @@ struct HomeView: View {
             if let d = library.lastScan {
                 Text("上次更新时间：\(d.formatted(.dateTime.year().month().day().hour().minute()))")
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
+            }
+            if library.scanning, let line = library.countLine {
+                Text(line).font(.footnote).foregroundStyle(.white.opacity(0.75)).monospacedDigit()
             }
             Button { Task { await library.scan() } } label: {
                 HStack(spacing: 8) {

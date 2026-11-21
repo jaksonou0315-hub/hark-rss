@@ -54,6 +54,15 @@ final class LibraryStore: ObservableObject {
     @Published var lastScan: Date? = UserDefaults.standard.object(forKey: "lib.lastScan") as? Date
     private var rescanPending = false
     private var pendingForce = false
+    @Published var scanFound = 0          // video files found so far
+    @Published var scanDone = 0           // files fully processed (in library + matched)
+    @Published var foldersLeft = 0
+    @Published var matching = false
+    var countLine: String? {
+        if matching { return "已找到 \(scanFound) 个文件，已完成 \(scanDone) 个，剩余 \(max(0, scanFound - scanDone)) 个" }
+        if scanFound > 0 || foldersLeft > 0 { return "已找到 \(scanFound) 个文件，剩余 \(foldersLeft) 个文件夹待读取" }
+        return nil
+    }
     private var enriching = false
 
     private let fileURL: URL = {
@@ -180,8 +189,11 @@ final class LibraryStore: ObservableObject {
 
     private func scanOnce(force: Bool) async {
         scanning = true
-        defer { scanning = false; progress = "" }
-        let outcome = await ScanCenter.shared.collect(folders, force: force) { [weak self] msg in self?.progress = msg }
+        scanFound = 0; scanDone = 0; foldersLeft = 0; matching = false
+        defer { scanning = false; matching = false; progress = "" }
+        let outcome = await ScanCenter.shared.collect(folders, force: force, counts: { [weak self] found, left in
+            self?.scanFound = found; self?.foldersLeft = left
+        }) { [weak self] msg in self?.progress = msg }
         let errors = outcome.errors
         let found = outcome.found
         let failedFolders = outcome.failedFolders
@@ -267,10 +279,17 @@ final class LibraryStore: ObservableObject {
     }
 
     private func matchPending() async {
-        let todo = items.filter { $0.tmdbId == nil || ($0.isTV && $0.files.contains { $0.episodeTitle == nil && $0.episode != nil }) }.map(\.id)
+        let todoItems = items.filter { $0.tmdbId == nil || ($0.isTV && $0.files.contains { $0.episodeTitle == nil && $0.episode != nil }) }
+        let todo = todoItems.map(\.id)
+        let fileCount = Dictionary(uniqueKeysWithValues: todoItems.map { ($0.id, $0.files.count) })
+        scanFound = items.reduce(0) { $0 + $1.files.count }
+        scanDone = scanFound - todoItems.reduce(0) { $0 + $1.files.count }
+        matching = true
+        defer { matching = false }
         var done = 0
         for id in todo {
             done += 1
+            if done > 1 { scanDone += fileCount[todo[done - 2]] ?? 0 }
             await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
             guard let idx = items.firstIndex(where: { $0.id == id }) else { continue }
             var item = items[idx]
