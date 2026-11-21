@@ -49,25 +49,58 @@ struct ContinueEntry: Identifiable {
 enum Groupings {
     static func isDoc(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { $0.contains("纪录") || $0 == "Documentary" } }
     static func isVariety(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { ["真人秀", "脱口秀", "Reality", "Talk"].contains($0) } }
-    static func isOther(_ i: LibraryItem) -> Bool { i.tmdbId == nil && !isBL(i) }
+    static func isOther(_ i: LibraryItem) -> Bool { category(i) == .other }
     static func isAnimation(_ i: LibraryItem) -> Bool { (i.genres ?? []).contains { $0 == "动画" || $0 == "Animation" || $0 == "動畫" } }
 
-    /// 手动归类（详情页 ⋯）：true = 归入 BL，false = 不归入 BL
-    static func blOverride(_ id: String) -> Bool? {
-        (UserDefaults.standard.dictionary(forKey: "lib.blOverride") as? [String: Bool])?[id]
+    /// 首页分类。用户长按 / 详情页 ⋯ 手动指定的分类优先，其次自动判断。
+    enum Category: String, CaseIterable {
+        case movie, animeMovie, tv, anime, variety, doc, bl, other
+        var name: String {
+            switch self {
+            case .movie: "电影"; case .animeMovie: "动画电影"; case .tv: "电视剧"; case .anime: "动画"
+            case .variety: "综艺"; case .doc: "纪录片"; case .bl: "BL"; case .other: "其他"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .movie: "film"; case .animeMovie: "sparkles.tv"; case .tv: "tv"; case .anime: "sparkles"
+            case .variety: "music.mic"; case .doc: "globe.asia.australia"; case .bl: "heart"; case .other: "square.grid.2x2"
+            }
+        }
     }
-    static func setBLOverride(_ id: String, _ v: Bool?) {
-        var d = (UserDefaults.standard.dictionary(forKey: "lib.blOverride") as? [String: Bool]) ?? [:]
-        d[id] = v
-        UserDefaults.standard.set(d, forKey: "lib.blOverride")
+    private static let catKey = "lib.category"
+    static func categoryOverride(_ id: String) -> Category? {
+        ((UserDefaults.standard.dictionary(forKey: catKey) as? [String: String])?[id]).flatMap(Category.init(rawValue:))
     }
+    @MainActor static func setCategory(_ id: String, _ c: Category?) {
+        var d = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
+        d[id] = c?.rawValue
+        UserDefaults.standard.set(d, forKey: catKey)
+        NotificationCenter.default.post(name: .categoryChanged, object: nil)
+    }
+    static func autoCategory(_ i: LibraryItem) -> Category {
+        if autoBL(i) { return .bl }
+        if i.tmdbId == nil { return .other }
+        let anim = isAnimation(i)
+        if i.isTV {
+            if isVariety(i) { return .variety }
+            if anim { return .anime }
+            if isDoc(i) { return .doc }
+            return .tv
+        }
+        if anim { return .animeMovie }
+        if isDoc(i) { return .doc }
+        return .movie
+    }
+    static func category(_ i: LibraryItem) -> Category { categoryOverride(i.id) ?? autoCategory(i) }
+    static func isBL(_ i: LibraryItem) -> Bool { category(i) == .bl }
+
     private static let blKeywords: Set<String> = [
         "boys' love", "boys love", "boy's love", "boys' love (bl)", "bl", "bl drama", "bl series", "bl manga", "bl anime",
         "yaoi", "shounen ai", "shounen-ai", "shōnen-ai", "danmei", "gay romance", "gay love", "gay couple",
     ]
     private static let blRegex = try! NSRegularExpression(pattern: "(^|[^A-Za-z])BL([^A-Za-z]|$)|耽美|boys'? ?love|yaoi|腐剧", options: [.caseInsensitive])
-    static func isBL(_ i: LibraryItem) -> Bool {
-        if let o = blOverride(i.id) { return o }
+    private static func autoBL(_ i: LibraryItem) -> Bool {
         if (i.keywords ?? []).contains(where: { blKeywords.contains($0) || $0.contains("boys' love") || $0.contains("yaoi") }) { return true }
         // file / folder names (path-based drives keep folder names in the path)
         for f in i.files.prefix(3) {
@@ -155,23 +188,23 @@ struct HomeShelves {
         var h = HomeShelves()
         let recent = items.sorted { $0.added > $1.added }
         h.recent = recent
-        let blSet = Set(recent.filter(Groupings.isBL).map(\.id))
-        let notBL = recent.filter { !blSet.contains($0.id) }
-        h.bl = recent.filter { blSet.contains($0.id) }
-        h.movies = notBL.filter { !$0.isTV && !Groupings.isOther($0) && !Groupings.isAnimation($0) && !Groupings.isDoc($0) }
-        h.animeMovies = notBL.filter { !$0.isTV && Groupings.isAnimation($0) }
-        h.anime = notBL.filter { $0.isTV && Groupings.isAnimation($0) && !Groupings.isVariety($0) }
-        h.shows = notBL.filter { $0.isTV && !Groupings.isOther($0) && !Groupings.isVariety($0) && !Groupings.isDoc($0) && !Groupings.isAnimation($0) }
-        h.docs = notBL.filter { Groupings.isDoc($0) && !Groupings.isAnimation($0) }
-        h.variety = notBL.filter(Groupings.isVariety)
-        h.other = recent.filter(Groupings.isOther)
+        var by: [Groupings.Category: [LibraryItem]] = [:]
+        for it in recent { by[Groupings.category(it), default: []].append(it) }
+        h.movies = by[.movie] ?? []
+        h.animeMovies = by[.animeMovie] ?? []
+        h.shows = by[.tv] ?? []
+        h.anime = by[.anime] ?? []
+        h.variety = by[.variety] ?? []
+        h.docs = by[.doc] ?? []
+        h.bl = by[.bl] ?? []
+        h.other = by[.other] ?? []
         h.unwatched = Groupings.unwatched(recent, marks: marks)
         h.genres = Groupings.genres(items)
         let withArt = recent.filter { $0.poster != nil || $0.backdrop != nil }
         h.hero = Array((withArt.isEmpty ? recent : withArt).prefix(8))
         h.cont = Groupings.continueWatching(items)
-        h.nMovies = items.filter { !$0.isTV && !Groupings.isOther($0) }.count
-        h.nShows = items.filter { $0.isTV && !Groupings.isOther($0) }.count
+        h.nMovies = h.movies.count + h.animeMovies.count
+        h.nShows = h.shows.count + h.anime.count + h.variety.count
         h.nOther = h.other.count
         return h
     }
@@ -250,6 +283,7 @@ struct HomeView: View {
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1; rebuild() }
             .onReceive(library.$items.debounce(for: .seconds(0.8), scheduler: RunLoop.main)) { _ in rebuild() }
+            .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in rebuild() }
             .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
             .onAppear { rebuild() }
             .task { await library.enrich() }
@@ -343,7 +377,7 @@ struct HomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(items.prefix(30)) { it in
-                            NavigationLink(value: it) { PosterTile(item: it) }.buttonStyle(.plain)
+                            NavigationLink(value: it) { PosterTile(item: it) }.buttonStyle(.plain).categoryMenu(it)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -534,6 +568,39 @@ struct HeroCarousel: View {
 
 // MARK: - Cards
 
+extension Notification.Name { static let categoryChanged = Notification.Name("lib.categoryChanged") }
+
+/// 「移到分类」菜单：长按海报，或详情页 ⋯
+struct CategoryMenuItems: View {
+    let item: LibraryItem
+    @State private var tick = 0
+    var body: some View {
+        let _ = tick
+        let cur = Groupings.category(item)
+        let manual = Groupings.categoryOverride(item.id) != nil
+        Menu {
+            ForEach(Groupings.Category.allCases, id: \.self) { c in
+                Button { Groupings.setCategory(item.id, c) } label: {
+                    if c == cur { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
+                }
+            }
+            if manual {
+                Divider()
+                Button { Groupings.setCategory(item.id, nil) } label: {
+                    Label("恢复自动分类（\(Groupings.autoCategory(item).name)）", systemImage: "arrow.uturn.backward")
+                }
+            }
+        } label: { Label("移到分类（当前：\(cur.name)）", systemImage: "folder.badge.gearshape") }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
+    }
+}
+
+extension View {
+    func categoryMenu(_ item: LibraryItem) -> some View {
+        contextMenu { CategoryMenuItems(item: item) }
+    }
+}
+
 struct PosterTile: View {
     let item: LibraryItem
     var width: CGFloat = 112
@@ -658,7 +725,7 @@ struct ItemGridView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                     ForEach(items) { it in
-                        NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain)
+                        NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain).categoryMenu(it)
                     }
                 }
                 .padding(16)
@@ -738,7 +805,7 @@ struct LibrarySearchView: View {
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                             ForEach(results) { it in
-                                NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain)
+                                NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain).categoryMenu(it)
                             }
                         }
                         .padding(16)

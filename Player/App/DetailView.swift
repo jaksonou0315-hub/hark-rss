@@ -495,11 +495,7 @@ struct DetailView: View {
                         Label(item.isTV ? "下载本季（\(targets.count) 集）" : "下载", systemImage: "arrow.down.to.line")
                     }
                 }
-                if Groupings.isBL(item) {
-                    Button { Groupings.setBLOverride(item.id, false); library.items = library.items } label: { Label("移出 BL 分类", systemImage: "tag.slash") }
-                } else {
-                    Button { Groupings.setBLOverride(item.id, true); library.items = library.items } label: { Label("归入 BL 分类", systemImage: "tag") }
-                }
+                CategoryMenuItems(item: item)
                 Button { setWatched(item, true) } label: { Label("标记为已观看", systemImage: "flag.fill") }
                 Button { setWatched(item, false) } label: { Label("标记为未观看", systemImage: "flag") }
                 ShareLink(item: shareText(item)) { Label("分享", systemImage: "square.and.arrow.up") }
