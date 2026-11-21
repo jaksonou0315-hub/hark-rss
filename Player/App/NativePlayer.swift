@@ -94,7 +94,7 @@ final class NativePlayerModel: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(true)
         let provider = SourceStore.shared.provider(for: request.source)
         do {
-            let p = try await provider.playable(request.file)
+            let p = try await DownloadStore.shared.playable(provider, request.file)
             resumeKey = p.resumeKey
             var opts: [String: Any] = [:]
             if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }

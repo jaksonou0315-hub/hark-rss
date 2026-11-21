@@ -113,6 +113,8 @@ final class SMBProvider: SourceProvider {
         return m
     }
 
+    func connectShareForDownload(_ shareName: String) async throws -> SMB2Manager { try await connect(shareName) }
+
     func list(_ dir: RemoteFile?) async throws -> [RemoteFile] {
         guard let dir else {
             let m = try client()

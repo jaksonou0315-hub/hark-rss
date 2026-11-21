@@ -84,6 +84,13 @@ struct SettingsView: View {
                     LabeledContent("影片数量", value: "\(library.items.count)")
                     Button("完整重新扫描") { Task { await library.scan(force: true) } }
                     NavigationLink("扫描诊断") { ScanDiagnosticsView() }
+                    NavigationLink("下载管理") { DownloadsView() }
+                    if library.removedCount > 0 {
+                        Button("恢复已移除的影片（\(library.removedCount) 个文件）") {
+                            library.restoreRemoved()
+                            Task { await library.scan(force: false) }
+                        }
+                    }
                 }
 
                 Section {

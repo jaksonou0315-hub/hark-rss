@@ -309,7 +309,9 @@ final class LibraryStore: ObservableObject {
         struct ScanGroup { var parsed: ParsedName; var files: [LibraryFile]; var serverPoster: URL?; var serverOverview: String? }
         var groups: [String: ScanGroup] = [:]
         var order: [String] = []
+        let excluded = LibraryStore.excludedFiles()
         for f in found {
+            if excluded.contains(f.source.id.uuidString + ":" + f.file.id) { continue }
             var p: ParsedName
             if let series = f.file.meta["series"] {          // Emby/Jellyfin episode
                 p = ParsedName(title: series, year: nil, season: f.file.meta["season"].flatMap { Int($0) }, episode: f.file.meta["episode"].flatMap { Int($0) })
@@ -370,8 +372,118 @@ final class LibraryStore: ObservableObject {
         refreshCounts()
     }
 
+    // MARK: manual edits (编辑信息 / 移除 / 单片重新扫描)
+
+    struct Override: Codable { var match: TMDBMatch? }       // nil match = 使用原文件数据
+    private(set) var overrides: [String: Override] = {
+        guard let d = UserDefaults.standard.data(forKey: "lib.overrides"),
+              let v = try? JSONDecoder().decode([String: Override].self, from: d) else { return [:] }
+        return v
+    }() {
+        didSet { if let d = try? JSONEncoder().encode(overrides) { UserDefaults.standard.set(d, forKey: "lib.overrides") } }
+    }
+
+    nonisolated static func excludedFiles() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: "lib.excluded") ?? [])
+    }
+
+    /// 编辑信息: pin a TMDB match (or the file's own data) for this item; survives rescans.
+    func applyMatch(_ itemId: String, _ m: TMDBMatch?) async {
+        overrides[itemId] = Override(match: m)
+        guard let j = items.firstIndex(where: { $0.id == itemId }) else { return }
+        var it = items[j]
+        if let m {
+            it.title = m.title.isEmpty ? it.title : m.title
+            it.originalTitle = m.originalTitle; it.year = m.year ?? it.year; it.overview = m.overview
+            it.poster = m.poster; it.backdrop = m.backdrop; it.rating = m.rating; it.tmdbId = m.id
+            it.kind = m.kind
+            let gs = m.genreIds.compactMap { TMDB.genreName($0) }
+            it.genres = gs.isEmpty ? nil : gs
+            it.certification = nil; it.countries = nil
+            for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
+        } else {
+            let first = it.files.first
+            let p = first.map { NameParser.parse($0.file.name, parents: []) }
+            it.title = p?.title ?? it.title; it.year = p?.year; it.originalTitle = nil
+            it.overview = first?.file.overview; it.poster = first?.file.posterURL; it.backdrop = nil
+            it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil
+        }
+        items[j] = it
+        save()
+        if m != nil { await fillEpisodes(itemId) }
+        Task { await enrich() }
+    }
+
+    private func fillEpisodes(_ itemId: String) async {
+        guard let j = items.firstIndex(where: { $0.id == itemId }), items[j].isTV, let tid = items[j].tmdbId else { return }
+        var it = items[j]
+        for sn in Set(it.files.compactMap { $0.season }) {
+            let eps = await TMDB.season(tvId: tid, season: sn)
+            for i in it.files.indices where it.files[i].season == sn {
+                if let e = it.files[i].episode, let info = eps[e] { it.files[i].episodeTitle = info.name; it.files[i].still = info.still }
+            }
+        }
+        if let k = items.firstIndex(where: { $0.id == itemId }) { items[k].files = it.files.map { f in
+            var f = f
+            if let n = it.files.first(where: { $0.id == f.id }) { f.episodeTitle = n.episodeTitle; f.still = n.still }
+            return f
+        } }
+        save()
+    }
+
+    /// 从媒体库中移除: hide these files from now on (they stay on the drive).
+    func removeItem(_ itemId: String) {
+        guard let it = items.first(where: { $0.id == itemId }) else { return }
+        var ex = Self.excludedFiles()
+        for f in it.files { ex.insert(f.id) }
+        UserDefaults.standard.set(Array(ex), forKey: "lib.excluded")
+        items.removeAll { $0.id == itemId }
+        save()
+    }
+
+    func restoreRemoved() {
+        UserDefaults.standard.removeObject(forKey: "lib.excluded")
+    }
+    var removedCount: Int { Self.excludedFiles().count }
+
+    /// 单片「重新扫描文件」: relist the folders this item's files live in, rebuild, rematch it.
+    func rescanItem(_ itemId: String) async {
+        guard let it = items.first(where: { $0.id == itemId }) else { return }
+        progress = "正在重新扫描 \(it.title)…"
+        defer { progress = "" }
+        let fileIds = Set(it.files.map(\.file.id))
+        for sid in Set(it.files.map(\.sourceId)) {
+            guard let src = SourceStore.shared.source(sid), !src.kind.isMediaServer else { continue }
+            let db = ScanCenter.shared.db(sid)
+            let parents = db.dirs.values.filter { $0.children.contains { fileIds.contains($0.id) } }
+            for snap in parents { _ = try? await ScanCenter.shared.browse(src, snap.dir) }
+        }
+        let f = ScanCenter.shared.snapshotFound(folders)
+        let current = items
+        let (built, _) = await Task.detached(priority: .userInitiated) { Self.buildItems(f, current: current) }.value
+        let have = Set(built.map(\.id))
+        items = built + items.filter { !have.contains($0.id) }
+        // force a fresh match unless the user pinned one
+        if let j = items.firstIndex(where: { $0.id == itemId }) {
+            if let o = overrides[itemId] { await applyMatch(itemId, o.match); return }
+            var x = items[j]
+            x.tmdbId = nil
+            for i in x.files.indices { x.files[i].episodeTitle = nil }
+            items[j] = x
+            if let tid = x.files.lazy.compactMap({ TMDB.idInPath($0.file.path + "/" + $0.file.name) }).first,
+               let m = await TMDB.byId(tid, tv: x.isTV) {
+                await applyMatch(itemId, m); overrides[itemId] = nil; return
+            }
+            if let m = await TMDB.search(title: x.title, year: x.year, tv: x.isTV) {
+                await applyMatch(itemId, m); overrides[itemId] = nil
+            }
+        }
+        save()
+    }
+
     private func needsMatch(_ it: LibraryItem) -> Bool {
-        it.tmdbId == nil || (it.isTV && it.files.contains { $0.episodeTitle == nil && $0.episode != nil })
+        if it.tmdbId == nil, let o = overrides[it.id], o.match == nil { return false }
+        return it.tmdbId == nil || (it.isTV && it.files.contains { $0.episodeTitle == nil && $0.episode != nil })
     }
 
     private func refreshCounts() {
@@ -403,7 +515,15 @@ final class LibraryStore: ObservableObject {
             if !crawlActive { progress = "正在匹配海报：\(item.title)" }
             if item.tmdbId == nil {
                 let p = ParsedName(title: item.title, year: item.year, season: nil, episode: nil)
-                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { reveal(id); continue }
+                let manual = overrides[id]
+                if let manual, manual.match == nil { reveal(id); continue }          // 使用原文件数据
+                var found: TMDBMatch? = manual?.match
+                if found == nil, let tid = item.files.lazy.compactMap({ TMDB.idInPath($0.file.path + "/" + $0.file.name) }).first {
+                    found = await TMDB.byId(tid, tv: item.isTV)
+                    if found == nil { found = await TMDB.byId(tid, tv: !item.isTV) }
+                }
+                if found == nil { found = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) }
+                guard let m = found else { reveal(id); continue }
                 item.title = m.title.isEmpty ? item.title : m.title
                 item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
                 item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id

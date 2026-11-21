@@ -91,7 +91,7 @@ final class PlayerController: NSObject, ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(true)
         let provider = SourceStore.shared.provider(for: request.source)
         do {
-            let p = try await provider.playable(request.file)
+            let p = try await DownloadStore.shared.playable(provider, request.file)
             playable = p
             let media = VLCMedia(url: p.url)
             for o in p.vlcOptions { media.addOption(o) }

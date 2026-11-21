@@ -131,6 +131,7 @@ struct TMDBMatch: Codable, Hashable {
     var backdrop: URL?
     var rating: Double?
     var genreIds: [Int] = []
+    var date: String? = nil
 }
 
 enum TMDB {
@@ -182,6 +183,27 @@ enum TMDB {
         return match(it, kind: tv ? "tv" : "movie")
     }
 
+    /// All results for the 编辑信息 sheet (no cache, user-driven).
+    static func searchList(_ query: String, tv: Bool) async -> [TMDBMatch] {
+        guard let r = request(tv ? "/search/tv" : "/search/movie", ["query": query, "include_adult": "false"]),
+              let o = try? await HTTP.json(r) else { return [] }
+        return o.arr("results").prefix(20).map { match($0, kind: tv ? "tv" : "movie") }
+    }
+
+    /// Direct lookup, used for [tmdbid=123] in file / folder names.
+    static func byId(_ id: Int, tv: Bool) async -> TMDBMatch? {
+        guard let r = request("/\(tv ? "tv" : "movie")/\(id)", [:]), let o = try? await HTTP.json(r) else { return nil }
+        var m = match(o, kind: tv ? "tv" : "movie")
+        if m.genreIds.isEmpty { m.genreIds = o.arr("genres").compactMap { $0.int("id") } }
+        return m.id == 0 ? nil : m
+    }
+
+    /// "[tmdbid=123]", "{tmdb-123}", "tmdbid-123" anywhere in a path.
+    static func idInPath(_ s: String) -> Int? {
+        guard let r = s.range(of: #"tmdb(id)?[=\-]\s*(\d+)"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        return Int(s[r].filter(\.isNumber))
+    }
+
     static func match(_ it: [String: Any], kind: String) -> TMDBMatch {
         let date = it.str(kind == "tv" ? "first_air_date" : "release_date") ?? ""
         return TMDBMatch(id: it.int("id") ?? 0, kind: kind,
@@ -192,7 +214,8 @@ enum TMDB {
                          poster: it.str("poster_path").flatMap { URL(string: imageBase + "w500" + $0) },
                          backdrop: it.str("backdrop_path").flatMap { URL(string: imageBase + "w1280" + $0) },
                          rating: (it["vote_average"] as? NSNumber)?.doubleValue,
-                         genreIds: (it["genre_ids"] as? [Int]) ?? [])
+                         genreIds: (it["genre_ids"] as? [Int]) ?? [],
+                         date: date.isEmpty ? nil : date)
     }
 
     /// Episode names/stills for a season.

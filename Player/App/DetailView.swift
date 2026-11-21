@@ -68,6 +68,9 @@ struct DetailView: View {
     @State private var details: TMDBDetails?
     @State private var expanded = false
     @State private var showAllEpisodes = false
+    @State private var showEdit = false
+    @State private var confirmRemove = false
+    @ObservedObject private var dl = DownloadStore.shared
 
     private var item: LibraryItem? { library.items.first { $0.id == itemId } }
 
@@ -111,6 +114,11 @@ struct DetailView: View {
                 if let hi = d?.posterHi, hi != item.poster { await tone.load(hi) }
             }
         }
+        .sheet(isPresented: $showEdit) { if let item { EditInfoView(item: item) } }
+        .confirmationDialog("从媒体库中移除？", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("移除", role: .destructive) { library.removeItem(itemId); dismiss() }
+        } message: { Text("网盘里的文件不会被删除，可在 设置 › 媒体库 里恢复。") }
+        .overlay(alignment: .bottom) { downloadBadge }
         .sheet(isPresented: $showAllEpisodes) {
             if let item { AllEpisodesSheet(item: item, season: $season, play: { play($0, item) }) }
         }
@@ -436,13 +444,23 @@ struct DetailView: View {
             .glass(in: Circle(), interactive: true)
             Spacer()
             Menu {
-                Button { marks.toggle(\.watched, item.id) } label: {
-                    Label(marks.watched.contains(item.id) ? "标为未看" : "标为已看", systemImage: "flag")
+                Button { showEdit = true } label: { Label("编辑信息", systemImage: "square.and.pencil") }
+                let targets = downloadTargets(item)
+                if !targets.isEmpty && targets.allSatisfy({ dl.isDownloaded($0.id) }) {
+                    Button(role: .destructive) { for f in targets { dl.delete(f.id) } } label: { Label("删除下载", systemImage: "trash") }
+                } else if targets.contains(where: { dl.progress[$0.id] != nil }) {
+                    Button { for f in targets { dl.cancel(f.id) } } label: { Label("取消下载", systemImage: "xmark.circle") }
+                } else {
+                    Button { dl.enqueue(targets, title: item.title) } label: {
+                        Label(item.isTV ? "下载本季（\(targets.count) 集）" : "下载", systemImage: "arrow.down.to.line")
+                    }
                 }
-                Button { marks.toggle(\.favorites, item.id) } label: {
-                    Label(marks.favorites.contains(item.id) ? "取消收藏" : "收藏", systemImage: "heart")
-                }
-                if !item.isTV {
+                Button { setWatched(item, true) } label: { Label("标记为已观看", systemImage: "flag.fill") }
+                Button { setWatched(item, false) } label: { Label("标记为未观看", systemImage: "flag") }
+                ShareLink(item: shareText(item)) { Label("分享", systemImage: "square.and.arrow.up") }
+                Button { Task { await library.rescanItem(item.id) } } label: { Label("重新扫描文件", systemImage: "arrow.clockwise") }
+                Button(role: .destructive) { confirmRemove = true } label: { Label("从媒体库中移除", systemImage: "trash") }
+                if !item.isTV && item.files.count > 1 {
                     Section("选择版本播放") {
                         ForEach(item.files) { f in Button(f.file.name) { play(f, item) } }
                     }
@@ -455,6 +473,50 @@ struct DetailView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 18)
         .padding(.top, 4)
+    }
+
+    // MARK: menu helpers
+
+    private func downloadTargets(_ item: LibraryItem) -> [LibraryFile] {
+        item.isTV ? item.episodes(season: season ?? item.seasons.first) : Array(item.files.prefix(1))
+    }
+
+    private func setWatched(_ item: LibraryItem, _ on: Bool) {
+        if on {
+            marks.watched.insert(item.id)
+            for f in item.files { marks.watched.insert(f.id) }
+        } else {
+            marks.watched.remove(item.id)
+            for f in item.files { marks.watched.remove(f.id); Resume.clear(f.id) }
+        }
+    }
+
+    private func shareText(_ item: LibraryItem) -> String {
+        var s = item.title + (item.year.map { " (\($0))" } ?? "")
+        if let id = item.tmdbId { s += "\nhttps://www.themoviedb.org/\(item.isTV ? "tv" : "movie")/\(id)" }
+        return s
+    }
+
+    @ViewBuilder private var downloadBadge: some View {
+        if let item {
+            let ids = downloadTargets(item).map(\.id)
+            let active = ids.compactMap { dl.progress[$0] }
+            if !active.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在下载 \(Int(active.reduce(0, +) / Double(active.count) * 100))%" + (active.count > 1 ? "（剩 \(active.count) 个）" : ""))
+                        .font(.footnote.monospacedDigit())
+                }
+                .padding(.horizontal, 16).frame(height: 40)
+                .glass(in: Capsule())
+                .padding(.bottom, 24)
+            } else if let e = dl.lastError {
+                Text(e).font(.footnote).lineLimit(2).padding(12)
+                    .glass(in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.bottom, 24).padding(.horizontal, 16)
+                    .onTapGesture { dl.lastError = nil }
+            }
+        }
     }
 
     // MARK: play
