@@ -30,6 +30,7 @@ struct RootView: View {
     @State private var tab = 0
     @State private var lastTab = 0
     @ObservedObject private var favNav = FavoritesNav.shared
+    @State private var favSearch = false     // follows favNav.inFolder only while 文件源 is the visible tab
 
     var body: some View {
         TabView(selection: $tab) {
@@ -37,7 +38,7 @@ struct RootView: View {
             Tab("文件源", systemImage: "folder", value: 1) { FavoriteSourcesView() }
             Tab("服务器", systemImage: "server.rack", value: 2) { SourcesView(mode: .servers) }
             Tab("设置", systemImage: "gearshape", value: 3) { SettingsView() }
-            if lastTab == 1 && favNav.inFolder {
+            if lastTab == 1 && favSearch {
                 Tab(value: 4, role: .search) { FavoriteFilesSearchView() }
             } else if lastTab == 1 {
                 Tab("添加", systemImage: "plus", value: 4, role: .search) { Color.clear }
@@ -46,7 +47,7 @@ struct RootView: View {
             }
         }
         .onChange(of: tab) { old, new in
-            if new == 4 && lastTab == 1 && !favNav.inFolder {
+            if new == 4 && lastTab == 1 && !favSearch {
                 // On 文件源 the search slot is a ＋ that opens 文件源管理.
                 tab = 1
                 NotificationCenter.default.post(name: .openSourceManager, object: nil)
@@ -54,6 +55,7 @@ struct RootView: View {
             }
             if new != 4 { lastTab = new }
         }
+        .onChange(of: favNav.inFolder) { _, v in if tab == 1 { favSearch = v } }
         .minimizingTabBar()
 
         .fullScreenCover(item: $router.request) { r in
