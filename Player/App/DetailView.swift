@@ -419,16 +419,20 @@ struct DetailView: View {
         }
         let g = Set(details?.genres ?? item.genres ?? [])
         if !g.isEmpty {
-            let scored = others.filter { !used.contains($0.id) }
-                .map { it -> (LibraryItem, Int) in
-                    var sc = Set(it.genres ?? []).intersection(g).count * 10
-                    if sc > 0 && it.kind == item.kind { sc += 3 }
-                    if sc > 0, let a = it.year, let b = item.year, abs(a - b) <= 5 { sc += 1 }
-                    return (it, sc)
-                }
-                .filter { $0.1 >= 10 }
-                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : ($0.0.rating ?? 0) > ($1.0.rating ?? 0) }
-            out += scored.map(\.0)
+            var scored: [(item: LibraryItem, score: Int)] = []
+            for it in others where !used.contains(it.id) {
+                let shared = Set(it.genres ?? []).intersection(g).count
+                guard shared > 0 else { continue }
+                var sc = shared * 10
+                if it.kind == item.kind { sc += 3 }
+                if let a = it.year, let b = item.year, abs(a - b) <= 5 { sc += 1 }
+                scored.append((it, sc))
+            }
+            scored.sort { l, r in
+                if l.score != r.score { return l.score > r.score }
+                return (l.item.rating ?? 0) > (r.item.rating ?? 0)
+            }
+            for e in scored { out.append(e.item) }
         }
         return Array(out.prefix(20))
     }
