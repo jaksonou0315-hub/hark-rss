@@ -54,17 +54,19 @@ enum Groupings {
 
     /// 首页分类。用户长按 / 详情页 ⋯ 手动指定的分类优先，其次自动判断。
     enum Category: String, CaseIterable {
-        case movie, animeMovie, tv, anime, variety, doc, bl, other
+        case movie, animeMovie, tv, anime, shortDrama, variety, concert, doc, bl, other
         var name: String {
             switch self {
             case .movie: "电影"; case .animeMovie: "动画电影"; case .tv: "电视剧"; case .anime: "动画"
             case .variety: "综艺"; case .doc: "纪录片"; case .bl: "BL"; case .other: "其他"
+            case .shortDrama: "短剧"; case .concert: "演唱会"
             }
         }
         var icon: String {
             switch self {
             case .movie: "film"; case .animeMovie: "sparkles.tv"; case .tv: "tv"; case .anime: "sparkles"
             case .variety: "music.mic"; case .doc: "globe.asia.australia"; case .bl: "heart"; case .other: "square.grid.2x2"
+            case .shortDrama: "iphone"; case .concert: "music.note"
             }
         }
     }
@@ -80,6 +82,8 @@ enum Groupings {
     }
     static func autoCategory(_ i: LibraryItem) -> Category {
         if autoBL(i) { return .bl }
+        if matches(i, concertRegex) || (i.keywords ?? []).contains(where: { concertKeywords.contains($0) }) { return .concert }
+        if matches(i, shortRegex) || (i.keywords ?? []).contains(where: { shortKeywords.contains($0) }) { return .shortDrama }
         if i.tmdbId == nil { return .other }
         let anim = isAnimation(i)
         if i.isTV {
@@ -100,6 +104,16 @@ enum Groupings {
         "yaoi", "shounen ai", "shounen-ai", "shōnen-ai", "danmei", "gay romance", "gay love", "gay couple",
     ]
     private static let blRegex = try! NSRegularExpression(pattern: "(^|[^A-Za-z])BL([^A-Za-z]|$)|耽美|boys'? ?love|yaoi|腐剧", options: [.caseInsensitive])
+    private static let concertKeywords: Set<String> = ["concert", "concert film", "live concert", "concert tour", "live performance", "music concert"]
+    private static let shortKeywords: Set<String> = ["short drama", "vertical drama", "micro drama", "mini drama", "vertical series"]
+    private static let concertRegex = try! NSRegularExpression(pattern: "演唱会|演唱會|音乐会|音樂會|巡演|巡回演唱|concert|live tour|world tour|in concert|コンサート|ライブ|콘서트", options: [.caseInsensitive])
+    private static let shortRegex = try! NSRegularExpression(pattern: "短剧|短劇|微短剧|竖屏剧|小剧场", options: [.caseInsensitive])
+    private static func matches(_ i: LibraryItem, _ re: NSRegularExpression) -> Bool {
+        for s in [i.title, i.originalTitle ?? ""] + i.files.prefix(3).map({ $0.file.path.contains("/") ? $0.file.path : $0.file.name }) {
+            if re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil { return true }
+        }
+        return false
+    }
     private static func autoBL(_ i: LibraryItem) -> Bool {
         if (i.keywords ?? []).contains(where: { blKeywords.contains($0) || $0.contains("boys' love") || $0.contains("yaoi") }) { return true }
         // file / folder names (path-based drives keep folder names in the path)
@@ -175,6 +189,8 @@ struct HomeShelves {
     var animeMovies: [LibraryItem] = []
     var anime: [LibraryItem] = []
     var bl: [LibraryItem] = []
+    var shortDramas: [LibraryItem] = []
+    var concerts: [LibraryItem] = []
     var docs: [LibraryItem] = []
     var variety: [LibraryItem] = []
     var other: [LibraryItem] = []
@@ -197,6 +213,8 @@ struct HomeShelves {
         h.variety = by[.variety] ?? []
         h.docs = by[.doc] ?? []
         h.bl = by[.bl] ?? []
+        h.shortDramas = by[.shortDrama] ?? []
+        h.concerts = by[.concert] ?? []
         h.other = by[.other] ?? []
         h.unwatched = Groupings.unwatched(recent, marks: marks)
         h.genres = Groupings.genres(items)
@@ -258,6 +276,8 @@ struct HomeView: View {
                             shelfRow("动画", shelves.anime)
                             shelfRow("综艺", shelves.variety)
                             shelfRow("纪录片", shelves.docs)
+                            shelfRow("短剧", shelves.shortDramas)
+                            shelfRow("演唱会", shelves.concerts)
                             shelfRow("BL", shelves.bl)
                             shelfRow("其他", shelves.other)
                             shelfRow("未观看", shelves.unwatched)
