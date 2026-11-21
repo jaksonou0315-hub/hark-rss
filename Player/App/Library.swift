@@ -173,7 +173,7 @@ final class LibraryStore: ObservableObject {
         let srcs = SourceStore.shared.sources
         let prefetchOff = Set(srcs.filter { $0.extra["prefetch"] == "0" }.map(\.id))
         let todo = items.filter { it in
-            it.tmdbId != nil && (it.certification == nil || it.genres == nil || it.keywords == nil)
+            it.tmdbId != nil && (it.certification == nil || it.genres == nil || it.keywords == nil || !(it.keywords ?? []).contains("#v2"))
                 && !(it.files.allSatisfy { prefetchOff.contains($0.sourceId) })
         }
         var changed = 0

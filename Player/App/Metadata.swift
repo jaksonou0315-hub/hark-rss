@@ -331,7 +331,9 @@ extension TMDB {
                                 }
                                 return out
                             }(),
-                            keywords: ((o.dict("keywords")?.arr(tv ? "results" : "keywords")) ?? []).compactMap { $0.str("name")?.lowercased() })
+                            keywords: ((o.dict("keywords")?.arr(tv ? "results" : "keywords")) ?? []).compactMap { $0.str("name")?.lowercased() }
+                                + (o.arr("networks") + o.arr("production_companies")).compactMap { $0.str("name").map { "net:" + $0.lowercased() } }
+                                + ["#v2"])
         store(key, d)
         return d
     }

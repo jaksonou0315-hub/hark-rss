@@ -83,7 +83,7 @@ enum Groupings {
     static func autoCategory(_ i: LibraryItem) -> Category {
         if autoBL(i) { return .bl }
         if matches(i, concertRegex) || (i.keywords ?? []).contains(where: { concertKeywords.contains($0) }) { return .concert }
-        if matches(i, shortRegex) || (i.keywords ?? []).contains(where: { shortKeywords.contains($0) }) { return .shortDrama }
+        if matches(i, shortRegex) || (i.keywords ?? []).contains(where: { k in shortKeywords.contains(k) || (k.hasPrefix("net:") && shortPlatforms.contains { k.contains($0) }) }) { return .shortDrama }
         if i.tmdbId == nil { return .other }
         let anim = isAnimation(i)
         if i.isTV {
@@ -106,6 +106,12 @@ enum Groupings {
     private static let blRegex = try! NSRegularExpression(pattern: "(^|[^A-Za-z])BL([^A-Za-z]|$)|耽美|boys'? ?love|yaoi|腐剧", options: [.caseInsensitive])
     private static let concertKeywords: Set<String> = ["concert", "concert film", "live concert", "concert tour", "live performance", "music concert"]
     private static let shortKeywords: Set<String> = ["short drama", "vertical drama", "micro drama", "mini drama", "vertical series"]
+    /// TMDB networks / production companies of short-drama apps (matched as substrings, lowercased)
+    private static let shortPlatforms: [String] = [
+        "红果", "hongguo", "reelshort", "dramabox", "shortmax", "goodshort", "flextv", "dramawave", "netshort",
+        "reelflix", "moboreels", "topshort", "snackshort", "kalos tv", "minishort", "shorttv", "short tv", "dramareels",
+        "河马剧场", "番茄短剧", "点众", "九州短剧", "麦芽短剧", "繁花剧场", "抖音短剧", "快手短剧", "微短剧",
+    ]
     private static let concertRegex = try! NSRegularExpression(pattern: "演唱会|演唱會|音乐会|音樂會|巡演|巡回演唱|concert|live tour|world tour|in concert|コンサート|ライブ|콘서트", options: [.caseInsensitive])
     private static let shortRegex = try! NSRegularExpression(pattern: "短剧|短劇|微短剧|竖屏剧|小剧场", options: [.caseInsensitive])
     private static func matches(_ i: LibraryItem, _ re: NSRegularExpression) -> Bool {
