@@ -49,19 +49,28 @@ final class LibraryStore: ObservableObject {
     @Published var folders: [LibraryFolder] = []
     @Published var items: [LibraryItem] = []
     @Published var scanning = false
-    @Published var progress = ""
+    let live = ScanLive()
+    var progress: String {
+        get { live.progress }
+        set { if live.progress != newValue { live.progress = newValue } }
+    }
     @Published var lastResult: String?
     @Published var lastScan: Date? = UserDefaults.standard.object(forKey: "lib.lastScan") as? Date
     private var rescanPending = false
     private var pendingForce = false
-    @Published var scanFound = 0          // video files found so far
-    @Published var scanDone = 0           // files fully processed (in library + matched)
-    @Published var foldersLeft = 0
-    @Published var matching = false
+    var scanFound = 0 { didSet { pushLine() } }          // video files found so far
+    var scanDone = 0 { didSet { pushLine() } }           // files in library with poster matched (or tried)
+    var foldersLeft = 0
+    var matching = false
     var countLine: String? {
         guard scanning else { return nil }
         return "已找到 \(scanFound) 个文件，已完成 \(min(scanDone, scanFound)) 个，剩余 \(max(0, scanFound - scanDone)) 个"
     }
+    private func pushLine() {
+        let l = countLine
+        if live.line != l { live.line = l }
+    }
+    private static let ioQueue = DispatchQueue(label: "library.save", qos: .utility)
     private var enriching = false
 
     private let fileURL: URL = {
@@ -77,8 +86,13 @@ final class LibraryStore: ObservableObject {
             folders = s.folders; items = s.items
         }
     }
+    /// Encode + write off the main thread (library.json can be several MB).
     private func save() {
-        if let d = try? JSONEncoder().encode(Snapshot(folders: folders, items: items)) { try? d.write(to: fileURL, options: .atomic) }
+        let snap = Snapshot(folders: folders, items: items)
+        let url = fileURL
+        Self.ioQueue.async {
+            if let d = try? JSONEncoder().encode(snap) { try? d.write(to: url, options: .atomic) }
+        }
     }
 
     var movies: [LibraryItem] { items.filter { !$0.isTV }.sorted { $0.added > $1.added } }
@@ -223,17 +237,24 @@ final class LibraryStore: ObservableObject {
         matchTried = []
         staged = [:]; stagedOrder = []
         knownIds = Set(items.map(\.id))
-        defer { scanning = false; matching = false; crawlActive = false; progress = "" }
+        defer { scanning = false; matching = false; crawlActive = false; progress = ""; pushLine() }
         let before = Set(items.flatMap { $0.files.map(\.id) })
         let folderSnapshot = folders
 
         // show videos as soon as their folder is read, and match posters while the crawl goes on
         let publisher = Task { @MainActor [weak self] in
+            var lastSig = -1
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: .seconds(3))
                 guard let self, !Task.isCancelled else { return }
+                let sig = self.scanFound &* 31 &+ self.foldersLeft
+                if sig == lastSig { continue }                      // nothing new was read
+                lastSig = sig
                 let f = ScanCenter.shared.snapshotFound(folderSnapshot)
-                let (built, _) = self.buildItems(f, current: self.items + Array(self.staged.values))
+                let current = self.items + Array(self.staged.values)
+                // grouping + name parsing for thousands of files: off the main thread
+                let (built, _) = await Task.detached(priority: .utility) { Self.buildItems(f, current: current) }.value
+                guard !Task.isCancelled else { return }
                 self.publish(built, keepMissing: true)
             }
         }
@@ -248,7 +269,8 @@ final class LibraryStore: ObservableObject {
         let failedFolders = outcome.failedFolders
 
         let current = items + Array(staged.values)
-        var (newItems, _) = buildItems(outcome.found, current: current)
+        let foundAll = outcome.found
+        var (newItems, _) = await Task.detached(priority: .userInitiated) { Self.buildItems(foundAll, current: current) }.value
         let old = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // keep what we already had from folders that could not be fully read this time (rate limits etc.)
         if !failedFolders.isEmpty {
@@ -282,7 +304,7 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Group found videos into library items, keeping whatever metadata `current` already has.
-    private func buildItems(_ found: [ScanFound], current: [LibraryItem]) -> ([LibraryItem], Int) {
+    nonisolated private static func buildItems(_ found: [ScanFound], current: [LibraryItem]) -> ([LibraryItem], Int) {
         // group
         struct ScanGroup { var parsed: ParsedName; var files: [LibraryFile]; var serverPoster: URL?; var serverOverview: String? }
         var groups: [String: ScanGroup] = [:]

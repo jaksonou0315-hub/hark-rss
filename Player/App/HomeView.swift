@@ -108,6 +108,57 @@ enum Groupings {
 
 // MARK: - Home
 
+/// Everything the home screen shows, computed once per library change (not on every render).
+struct HomeShelves {
+    var recent: [LibraryItem] = []
+    var movies: [LibraryItem] = []
+    var shows: [LibraryItem] = []
+    var docs: [LibraryItem] = []
+    var variety: [LibraryItem] = []
+    var other: [LibraryItem] = []
+    var unwatched: [LibraryItem] = []
+    var genres: [Bucket] = []
+    var hero: [LibraryItem] = []
+    var cont: [ContinueEntry] = []
+    var nMovies = 0, nShows = 0, nOther = 0
+
+    @MainActor static func build(_ items: [LibraryItem], marks: ItemMarks) -> HomeShelves {
+        var h = HomeShelves()
+        let recent = items.sorted { $0.added > $1.added }
+        h.recent = recent
+        h.movies = recent.filter { !$0.isTV }
+        h.shows = recent.filter { $0.isTV && !Groupings.isVariety($0) && !Groupings.isDoc($0) }
+        h.docs = recent.filter(Groupings.isDoc)
+        h.variety = recent.filter(Groupings.isVariety)
+        h.other = recent.filter(Groupings.isOther)
+        h.unwatched = Groupings.unwatched(recent, marks: marks)
+        h.genres = Groupings.genres(items)
+        let withArt = recent.filter { $0.poster != nil || $0.backdrop != nil }
+        h.hero = Array((withArt.isEmpty ? recent : withArt).prefix(8))
+        h.cont = Groupings.continueWatching(items)
+        h.nMovies = items.filter { !$0.isTV && !Groupings.isOther($0) }.count
+        h.nShows = items.filter { $0.isTV && !Groupings.isOther($0) }.count
+        h.nOther = h.other.count
+        return h
+    }
+}
+
+/// Scan counters live in their own object so ticking numbers don't re-render the whole home screen.
+@MainActor
+final class ScanLive: ObservableObject {
+    @Published var line: String?
+    @Published var progress = ""
+}
+
+struct ScanCountLine: View {
+    @ObservedObject var live: ScanLive
+    var body: some View {
+        if let line = live.line {
+            Text(line).font(.footnote).foregroundStyle(.white.opacity(0.75)).monospacedDigit()
+        }
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var settings: AppSettings
@@ -117,8 +168,9 @@ struct HomeView: View {
     @State private var showFolders = false
     @State private var resumeTick = 0
     @State private var path = NavigationPath()
+    @State private var shelves = HomeShelves()
 
-    private var recent: [LibraryItem] { library.items.sorted { $0.added > $1.added } }
+    private func rebuild() { shelves = HomeShelves.build(library.items, marks: marks) }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -129,17 +181,17 @@ struct HomeView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 26) {
-                            HeroCarousel(items: heroItems)
+                            HeroCarousel(items: shelves.hero)
                             banners
                             continueRow
-                            shelfRow("最近添加", recent)
-                            shelfRow("电影", library.movies)
-                            shelfRow("电视剧", library.shows.filter { !Groupings.isVariety($0) && !Groupings.isDoc($0) })
-                            shelfRow("纪录片", recent.filter(Groupings.isDoc))
-                            shelfRow("综艺", recent.filter(Groupings.isVariety))
-                            shelfRow("其他", recent.filter(Groupings.isOther))
-                            shelfRow("未观看", Groupings.unwatched(recent, marks: marks))
-                            bucketRow("类型", Groupings.genres(library.items))
+                            shelfRow("最近添加", shelves.recent)
+                            shelfRow("电影", shelves.movies)
+                            shelfRow("电视剧", shelves.shows)
+                            shelfRow("纪录片", shelves.docs)
+                            shelfRow("综艺", shelves.variety)
+                            shelfRow("其他", shelves.other)
+                            shelfRow("未观看", shelves.unwatched)
+                            bucketRow("类型", shelves.genres)
                             stats
                         }
                         .padding(.bottom, 120)
@@ -159,15 +211,14 @@ struct HomeView: View {
                 }
             }
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
-            .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1 }
+            .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1; rebuild() }
+            .onReceive(library.$items.debounce(for: .seconds(0.8), scheduler: RunLoop.main)) { _ in rebuild() }
+            .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
+            .onAppear { rebuild() }
             .task { await library.enrich() }
         }
     }
 
-    private var heroItems: [LibraryItem] {
-        let withArt = recent.filter { $0.poster != nil || $0.backdrop != nil }
-        return Array((withArt.isEmpty ? recent : withArt).prefix(8))
-    }
 
     // MARK: top bar
 
@@ -227,8 +278,7 @@ struct HomeView: View {
     }
 
     @ViewBuilder private var continueRow: some View {
-        let _ = resumeTick
-        let list = Groupings.continueWatching(library.items)
+        let list = shelves.cont
         if !list.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 header("继续观看", count: list.count, route: .items("继续观看", list.map { $0.item.id }))
@@ -285,9 +335,7 @@ struct HomeView: View {
     }
 
     private var stats: some View {
-        let movies = library.items.filter { !$0.isTV && !Groupings.isOther($0) }.count
-        let shows = library.items.filter { $0.isTV && !Groupings.isOther($0) }.count
-        let other = library.items.filter(Groupings.isOther).count
+        let movies = shelves.nMovies, shows = shelves.nShows, other = shelves.nOther
         return VStack(spacing: 14) {
             HStack(spacing: 10) {
                 statTile("电影", movies, Color(red: 0.42, green: 0.45, blue: 0.85), "film")
@@ -298,9 +346,7 @@ struct HomeView: View {
                 Text("上次更新时间：\(d.formatted(.dateTime.year().month().day().hour().minute()))")
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))
             }
-            if library.scanning, let line = library.countLine {
-                Text(line).font(.footnote).foregroundStyle(.white.opacity(0.75)).monospacedDigit()
-            }
+            ScanCountLine(live: library.live)
             Button { Task { await library.scan() } } label: {
                 HStack(spacing: 8) {
                     if library.scanning { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }

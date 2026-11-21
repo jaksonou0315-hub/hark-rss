@@ -227,10 +227,15 @@ final class SnapshotDB {
         dirty = true
     }
 
+    private static let ioQueue = DispatchQueue(label: "scan.snapshot.save", qos: .utility)
+    /// Encode + write off the main thread; writes stay in order on one serial queue.
     func flush() {
         guard dirty else { return }
         dirty = false
-        if let d = try? JSONEncoder().encode(dirs) { try? d.write(to: url, options: .atomic) }
+        let copy = dirs, u = url
+        Self.ioQueue.async {
+            if let d = try? JSONEncoder().encode(copy) { try? d.write(to: u, options: .atomic) }
+        }
     }
 
     func purge() {
