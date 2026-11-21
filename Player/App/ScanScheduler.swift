@@ -58,6 +58,28 @@ enum ScanError: Error {
     }
 }
 
+// MARK: - Deadline
+
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock(); private var done = false
+    func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
+
+/// Runs `op`, but gives up with URLError(.timedOut) after `seconds` even if `op` ignores cancellation.
+func withDeadline<T>(_ seconds: Double, _ op: @escaping () async throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+        let once = OnceFlag()
+        let work = Task {
+            do { let v = try await op(); if once.claim() { cont.resume(returning: v) } }
+            catch { if once.claim() { cont.resume(throwing: error) } }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if once.claim() { work.cancel(); cont.resume(throwing: URLError(.timedOut)) }
+        }
+    }
+}
+
 // MARK: - Per-source gate (pacing + AIMD + backoff + suspension)
 
 struct GateStats: Hashable {
@@ -617,7 +639,11 @@ private final class CrawlRun {
         do {
             try await gate.waitTurn()
             let t0 = Date()
-            let list = try await provider.list(job.dir)
+            // hard deadline: a listing that never returns (stalled socket after the app was suspended, endless paging)
+            // used to park a worker forever, and with every worker parked the crawl froze with folders still waiting
+            let dir = job.dir
+            let cloudPaged = [.guangya, .quark, .aliyun, .baidu, .pan115].contains(source.kind)
+            let list = try await withDeadline(cloudPaged ? 180 : 90) { try await provider.list(dir) }
             await gate.onSuccess(ms: Date().timeIntervalSince(t0) * 1000)
             listed += 1
             visited.insert(key)

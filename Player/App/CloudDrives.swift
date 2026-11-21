@@ -226,12 +226,36 @@ final class GuangyaProvider: SourceProvider {
         return s
     }
 
+    private let refreshLock = NSLock()
+    private var refreshing: Task<MediaSource, Error>?
+
+    /// One token refresh at a time: several scan workers hitting an expired token used to refresh in parallel,
+    /// and the rotated refresh_token made all but the first fail.
     private func refresh() async throws {
-        guard !source.refreshToken.trimmed.isEmpty else { throw AppError.message("光鸭登录已过期，请重新短信登录") }
-        let o = try await HTTP.json(HTTP.request(URL(string: Self.account + "/v1/auth/token")!, method: "POST", headers: Self.accountHeaders(source),
-            json: ["client_id": Self.clientId(source), "grant_type": "refresh_token", "refresh_token": source.refreshToken.trimmed]))
-        source = try Self.apply(o, to: source)
-        await SourceStore.shared.updateCredentials(source)
+        refreshLock.lock()
+        let t: Task<MediaSource, Error>
+        if let r = refreshing { t = r } else {
+            let s = source
+            t = Task { try await Self.refreshed(s) }
+            refreshing = t
+        }
+        refreshLock.unlock()
+        do {
+            let ns = try await t.value
+            refreshLock.lock(); source = ns; if refreshing == t { refreshing = nil }; refreshLock.unlock()
+        } catch {
+            refreshLock.lock(); if refreshing == t { refreshing = nil }; refreshLock.unlock()
+            throw error
+        }
+    }
+
+    private static func refreshed(_ s: MediaSource) async throws -> MediaSource {
+        guard !s.refreshToken.trimmed.isEmpty else { throw AppError.message("光鸭登录已过期，请重新短信登录") }
+        let o = try await HTTP.json(HTTP.request(URL(string: account + "/v1/auth/token")!, method: "POST", headers: accountHeaders(s),
+            json: ["client_id": clientId(s), "grant_type": "refresh_token", "refresh_token": s.refreshToken.trimmed]))
+        let ns = try apply(o, to: s)
+        await SourceStore.shared.updateCredentials(ns)
+        return ns
     }
 
     private func post(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
@@ -243,9 +267,10 @@ final class GuangyaProvider: SourceProvider {
             let (d, h) = try await HTTP.data(r)
             return (h.statusCode, (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] ?? [:])
         }
+        let usedToken = source.token
         var (st, o) = try await once()
         if st == 401 || st == 403 {
-            try await refresh()
+            if source.token == usedToken { try await refresh() }   // another worker may have refreshed already
             (st, o) = try await once()
         }
         guard (200..<300).contains(st) else { throw AppError.message("光鸭请求失败 HTTP \(st)") }
