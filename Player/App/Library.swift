@@ -68,8 +68,7 @@ final class LibraryStore: ObservableObject {
     var countLine: String? {
         guard scanning else { return nil }
         let main = "已找到 \(scanFound) 个文件，已完成 \(min(scanDone, scanFound)) 个，剩余 \(max(0, scanFound - scanDone)) 个"
-        guard crawlActive else { return main }
-        return main + "\n正在读取文件夹：已读 \(foldersRead) 个，待读 \(foldersLeft) 个"
+        return main
     }
     private func pushLine() {
         let l = countLine

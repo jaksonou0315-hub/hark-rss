@@ -599,12 +599,21 @@ extension Notification.Name { static let categoryChanged = Notification.Name("li
 /// 「移到分类」菜单：长按海报，或详情页 ⋯
 struct CategoryMenuItems: View {
     let item: LibraryItem
+    var flat = false      // long-press menu: list categories directly (a nested submenu draws a second panel behind it)
     @State private var tick = 0
     var body: some View {
         let _ = tick
         let cur = Groupings.category(item)
         let manual = Groupings.categoryOverride(item.id) != nil
-        Menu {
+        if flat {
+            Section("移到分类（当前：\(cur.name)）") { items(cur: cur, manual: manual) }
+                .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
+        } else {
+            Menu { items(cur: cur, manual: manual) } label: { Label("移到分类（当前：\(cur.name)）", systemImage: "folder.badge.gearshape") }
+                .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
+        }
+    }
+    @ViewBuilder private func items(cur: Groupings.Category, manual: Bool) -> some View {
             ForEach(Groupings.Category.allCases, id: \.self) { c in
                 Button { Groupings.setCategory(item.id, c) } label: {
                     if c == cur { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
@@ -616,14 +625,12 @@ struct CategoryMenuItems: View {
                     Label("恢复自动分类（\(Groupings.autoCategory(item).name)）", systemImage: "arrow.uturn.backward")
                 }
             }
-        } label: { Label("移到分类（当前：\(cur.name)）", systemImage: "folder.badge.gearshape") }
-        .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
     }
 }
 
 extension View {
     func categoryMenu(_ item: LibraryItem) -> some View {
-        contextMenu { CategoryMenuItems(item: item) }
+        contextMenu { CategoryMenuItems(item: item, flat: true) }
     }
 }
 
