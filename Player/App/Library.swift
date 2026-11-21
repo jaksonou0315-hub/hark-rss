@@ -168,7 +168,7 @@ final class LibraryStore: ObservableObject {
 
 
     /// force = list every folder now (重新扫描文件); otherwise a delta pass that only lists dirs past their TTL.
-    func scan(force: Bool = false) async {
+    func scan(force: Bool = true) async {
         if scanning { rescanPending = true; pendingForce = pendingForce || force; return }
         var f = force
         repeat {
@@ -212,6 +212,7 @@ final class LibraryStore: ObservableObject {
         // match with TMDB
         let old = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var newItems: [LibraryItem] = []
+        var newFileCount = 0
         var done = 0
         for key in order {
             guard let g = groups[key] else { continue }
@@ -221,10 +222,18 @@ final class LibraryStore: ObservableObject {
             let isTV = g.parsed.isEpisode
             var item = LibraryItem(id: key, kind: isTV ? "tv" : "movie", title: g.parsed.title, year: g.parsed.year,
                                    overview: g.serverOverview, poster: g.serverPoster, files: g.files)
+            if let prev = old[key] {
+                // keep the original date; bump it when new files appeared so the show moves to the front of 最近添加
+                let prevIds = Set(prev.files.map(\.id))
+                let fresh = g.files.filter { !prevIds.contains($0.id) }.count
+                item.added = fresh > 0 ? Date() : prev.added
+                newFileCount += fresh
+            } else {
+                newFileCount += g.files.count
+            }
             if let prev = old[key], prev.tmdbId != nil {
                 item.title = prev.title; item.originalTitle = prev.originalTitle; item.year = prev.year; item.overview = prev.overview
                 item.poster = prev.poster; item.backdrop = prev.backdrop; item.rating = prev.rating; item.tmdbId = prev.tmdbId
-                item.added = prev.added
                 item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries
                 for i in item.files.indices {
                     if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
@@ -281,7 +290,7 @@ final class LibraryStore: ObservableObject {
         if newItems.isEmpty {
             lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
         } else {
-            lastResult = "扫描完成：\(newItems.count) 部影片" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
+            lastResult = "扫描完成：\(newItems.count) 部影片，新增 \(newFileCount) 个文件" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
         }
     }
 }

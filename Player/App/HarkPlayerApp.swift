@@ -52,11 +52,7 @@ struct RootView: View {
             if new != 4 { lastTab = new }
         }
         .minimizingTabBar()
-        .task {
-            // one delta pass on launch: only dirs past their TTL are listed
-            let lib = LibraryStore.shared
-            if !lib.folders.isEmpty, (lib.lastScan.map { Date().timeIntervalSince($0) > 1800 } ?? true) { await lib.scan() }
-        }
+
         .fullScreenCover(item: $router.request) { r in
             PlayerEntry(request: r)
         }
