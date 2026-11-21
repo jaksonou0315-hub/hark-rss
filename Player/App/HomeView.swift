@@ -54,7 +54,7 @@ enum Groupings {
 
     /// 首页分类。用户长按 / 详情页 ⋯ 手动指定的分类优先，其次自动判断。
     enum Category: String, CaseIterable {
-        case movie, animeMovie, tv, anime, shortDrama, variety, concert, doc, bl, other
+        case movie, animeMovie, tv, shortDrama, anime, variety, doc, concert, bl, other
         var name: String {
             switch self {
             case .movie: "电影"; case .animeMovie: "动画电影"; case .tv: "电视剧"; case .anime: "动画"
@@ -260,6 +260,7 @@ struct HomeView: View {
     @State private var resumeTick = 0
     @State private var path = NavigationPath()
     @State private var shelves = HomeShelves()
+    @State private var barVisible = true
 
     private func rebuild() { shelves = HomeShelves.build(library.items, marks: marks) }
 
@@ -279,14 +280,13 @@ struct HomeView: View {
                             shelfRow("电影", shelves.movies)
                             shelfRow("动画电影", shelves.animeMovies)
                             shelfRow("电视剧", shelves.shows)
+                            shelfRow("短剧", shelves.shortDramas)
                             shelfRow("动画", shelves.anime)
                             shelfRow("综艺", shelves.variety)
                             shelfRow("纪录片", shelves.docs)
-                            shelfRow("短剧", shelves.shortDramas)
                             shelfRow("演唱会", shelves.concerts)
                             shelfRow("BL", shelves.bl)
                             shelfRow("其他", shelves.other)
-                            shelfRow("未观看", shelves.unwatched)
                             bucketRow("类型", shelves.genres)
                             stats
                         }
@@ -295,8 +295,20 @@ struct HomeView: View {
                     .scrollIndicators(.hidden)
                     .ignoresSafeArea(edges: .top)
                     .refreshable { await library.scan() }
+                    // hide the top controls while scrolling down, bring them back on any upward scroll (or at the top)
+                    .onScrollGeometryChange(for: CGFloat.self) { g in g.contentOffset.y + g.contentInsets.top } action: { old, y in
+                        let show: Bool
+                        if y < 40 { show = true }
+                        else if y - old > 6 { show = false }
+                        else if old - y > 6 { show = true }
+                        else { return }
+                        if show != barVisible { withAnimation(.easeInOut(duration: 0.2)) { barVisible = show } }
+                    }
                 }
                 topBar
+                    .opacity(barVisible ? 1 : 0)
+                    .offset(y: barVisible ? 0 : -24)
+                    .allowsHitTesting(barVisible)
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: LibraryItem.self) { DetailView(itemId: $0.id) }
