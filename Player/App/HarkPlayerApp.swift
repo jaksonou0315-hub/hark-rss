@@ -29,6 +29,7 @@ struct RootView: View {
     @EnvironmentObject var router: PlaybackRouter
     @State private var tab = 0
     @State private var lastTab = 0
+    @ObservedObject private var favNav = FavoritesNav.shared
 
     var body: some View {
         TabView(selection: $tab) {
@@ -36,14 +37,16 @@ struct RootView: View {
             Tab("文件源", systemImage: "folder", value: 1) { FavoriteSourcesView() }
             Tab("服务器", systemImage: "server.rack", value: 2) { SourcesView(mode: .servers) }
             Tab("设置", systemImage: "gearshape", value: 3) { SettingsView() }
-            if lastTab == 1 {
+            if lastTab == 1 && favNav.inFolder {
+                Tab(value: 4, role: .search) { FavoriteFilesSearchView() }
+            } else if lastTab == 1 {
                 Tab("添加", systemImage: "plus", value: 4, role: .search) { Color.clear }
             } else {
                 Tab(value: 4, role: .search) { LibrarySearchView() }
             }
         }
         .onChange(of: tab) { old, new in
-            if new == 4 && lastTab == 1 {
+            if new == 4 && lastTab == 1 && !favNav.inFolder {
                 // On 文件源 the search slot is a ＋ that opens 文件源管理.
                 tab = 1
                 NotificationCenter.default.post(name: .openSourceManager, object: nil)

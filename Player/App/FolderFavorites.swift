@@ -89,7 +89,11 @@ struct FavoriteSourcesView: View {
                 }
             }
             .navigationTitle("文件源")
-            .navigationDestination(for: BrowseTarget.self) { FolderView(target: $0) }
+            .navigationDestination(for: BrowseTarget.self) {
+                FolderView(target: $0)
+                    .onAppear { FavoritesNav.shared.enter() }
+                    .onDisappear { FavoritesNav.shared.leave() }
+            }
             .navigationDestination(for: SourceRoute.self) { r in
                 switch r {
                 case .manage: SourceManagerView(path: $path)
@@ -187,5 +191,140 @@ struct AddedSourcesView: View {
                 NavigationLink(value: SourceRoute.addList) { Image(systemName: "plus") }
             }
         }
+    }
+}
+
+// MARK: - Search inside starred folders (文件源 › folder › 🔍)
+
+/// True while a starred folder is open in the 文件源 tab: the tab bar's ＋ turns into a search for starred folders only.
+@MainActor
+final class FavoritesNav: ObservableObject {
+    static let shared = FavoritesNav()
+    @Published private(set) var inFolder = false
+    private var depth = 0
+    func enter() { depth += 1; update() }
+    func leave() { depth = max(0, depth - 1); update() }
+    private func update() {
+        let v = depth > 0
+        if v != inFolder { inFolder = v }
+    }
+}
+
+struct FavoriteFileHit: Identifiable {
+    var id: String { source.id.uuidString + ":" + file.id }
+    var source: MediaSource
+    var file: RemoteFile
+    var siblings: [RemoteFile]
+    var place: String
+}
+
+extension ScanCenter {
+    /// Make sure a starred folder's tree is in the snapshot DB (lists only dirs never seen or past their TTL; paced per source).
+    func index(_ s: MediaSource, _ dir: RemoteFile?, progress: @escaping (String) -> Void) async {
+        guard !s.kind.isMediaServer else { return }
+        let run = CrawlRunHandle.make(center: self, source: s, db: db(s.id), gate: gate(s), progress: progress)
+        await run(dir)
+        db(s.id).flush()
+    }
+
+    /// Name search over the snapshot trees of the starred folders only (no network).
+    func searchFavorites(_ q: String, _ favs: [FavoriteFolder]) -> [FavoriteFileHit] {
+        let t = q.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return [] }
+        var out: [FavoriteFileHit] = []
+        var seen = Set<String>()
+        for fav in favs {
+            guard let s = SourceStore.shared.source(fav.sourceId) else { continue }
+            let db = db(s.id)
+            var stack: [(String, String, Int)] = [(SnapshotDB.key(fav.dir), fav.title, 0)]
+            while let top = stack.popLast(), out.count < 400 {
+                let (key, place, depth) = top
+                guard seen.insert(s.id.uuidString + key).inserted, let snap = db[key] else { continue }
+                for f in snap.children {
+                    if f.isDir {
+                        if ScanRules.skipDir(f.name) { continue }
+                        if f.name.localizedCaseInsensitiveContains(t) {
+                            out.append(FavoriteFileHit(source: s, file: f, siblings: [], place: place))
+                        }
+                        if depth < 12 { stack.append((f.id, place + " › " + f.name, depth + 1)) }
+                    } else if f.isVideo, f.name.localizedCaseInsensitiveContains(t) {
+                        out.append(FavoriteFileHit(source: s, file: f, siblings: snap.children, place: place))
+                    }
+                }
+            }
+        }
+        return out.sorted { a, b in
+            if a.file.isDir != b.file.isDir { return a.file.isDir }
+            return a.file.name.localizedStandardCompare(b.file.name) == .orderedAscending
+        }
+    }
+}
+
+struct FavoriteFilesSearchView: View {
+    @EnvironmentObject var router: PlaybackRouter
+    @ObservedObject private var favs = FolderFavorites.shared
+    @State private var q = ""
+    @State private var hits: [FavoriteFileHit] = []
+    @State private var indexing: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AuroraBackground()
+                List {
+                    if let indexing {
+                        HStack(spacing: 10) { ProgressView().controlSize(.small); Text(indexing).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+                            .listRowBackground(Color.clear)
+                    }
+                    if q.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("只搜索「文件源」里收藏的文件夹，不包含媒体库刮削的影片。")
+                            .font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
+                    } else if hits.isEmpty && indexing == nil {
+                        ContentUnavailableView.search(text: q).listRowBackground(Color.clear)
+                    }
+                    ForEach(hits) { h in
+                        if h.file.isDir {
+                            NavigationLink(value: BrowseTarget(source: h.source, dir: h.file)) { row(h) }
+                                .listRowBackground(Color.clear)
+                        } else {
+                            Button { router.play(PlayRequest(source: h.source, file: h.file, siblings: h.siblings)) } label: { row(h) }
+                                .buttonStyle(.plain).listRowBackground(Color.clear)
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle("搜索收藏")
+            .navigationDestination(for: BrowseTarget.self) { FolderView(target: $0) }
+            .searchable(text: $q, prompt: "收藏文件夹里的文件名")
+            .onChange(of: q) { _, _ in refresh() }
+            .task { await buildIndex() }
+        }
+    }
+
+    private func row(_ h: FavoriteFileHit) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: h.file.isDir ? "folder.fill" : "film").font(.title3)
+                .foregroundStyle(h.file.isDir ? h.source.kind.tint : .secondary).frame(width: 30)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(h.file.name).lineLimit(2)
+                Text(h.place).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func refresh() { hits = ScanCenter.shared.searchFavorites(q, favs.items) }
+
+    private func buildIndex() async {
+        for f in favs.items {
+            guard let s = SourceStore.shared.source(f.sourceId) else { continue }
+            indexing = "正在读取 \(f.title)…"
+            await ScanCenter.shared.index(s, f.dir) { msg in indexing = msg }
+            refresh()
+        }
+        indexing = nil
+        refresh()
     }
 }

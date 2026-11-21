@@ -486,6 +486,18 @@ final class ScanCenter: ObservableObject {
     }
 }
 
+/// Lets other files start a one-folder crawl without exposing CrawlRun.
+enum CrawlRunHandle {
+    @MainActor static func make(center: ScanCenter, source: MediaSource, db: SnapshotDB, gate: SourceGate,
+                                progress: @escaping (String) -> Void) -> (RemoteFile?) async -> Void {
+        { dir in
+            let run = CrawlRun(center: center, source: source, db: db, gate: gate, force: false, progress: progress)
+            run.enqueue(dir: dir, depth: 0, type: .userTriggered)
+            await run.run()
+        }
+    }
+}
+
 /// One source's crawl: deduped priority queue with notBefore delays; workers never sleep while holding a slot.
 @MainActor
 private final class CrawlRun {
