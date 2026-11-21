@@ -153,19 +153,28 @@ final class NativePlayerModel: ObservableObject {
 struct AVPlayerVC: UIViewControllerRepresentable {
     let player: AVPlayer
     let onDone: () -> Void
-    func makeCoordinator() -> Coord { Coord(onDone) }
+    var onTap: () -> Void = {}
+    func makeCoordinator() -> Coord { Coord(onDone, onTap) }
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
         vc.allowsPictureInPicturePlayback = true
         vc.canStartPictureInPictureAutomaticallyFromInline = true
         vc.delegate = context.coordinator
+        // watch taps (without stealing them) so our close button shows/hides together with the system controls
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coord.tapped))
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        vc.view.addGestureRecognizer(tap)
         return vc
     }
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {}
-    final class Coord: NSObject, AVPlayerViewControllerDelegate {
+    final class Coord: NSObject, AVPlayerViewControllerDelegate, UIGestureRecognizerDelegate {
         let done: () -> Void
-        init(_ d: @escaping () -> Void) { done = d }
+        let tap: () -> Void
+        init(_ d: @escaping () -> Void, _ t: @escaping () -> Void) { done = d; tap = t }
+        @objc func tapped() { tap() }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
         func playerViewController(_ vc: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator c: UIViewControllerTransitionCoordinator) { done() }
     }
 }
@@ -178,7 +187,7 @@ struct NativePlayerView: View {
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
-            AVPlayerVC(player: m.player) { close() }.ignoresSafeArea()
+            AVPlayerVC(player: m.player, onDone: { close() }, onTap: { toggleClose() }).ignoresSafeArea()
             if m.showBadges, !m.badges.isEmpty {
                 HStack(spacing: 8) {
                     ForEach(m.badges, id: \.self) { b in
@@ -194,16 +203,36 @@ struct NativePlayerView: View {
                     Button("关闭") { close() }.glassButton(prominent: true)
                 }.padding(24).glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous)).padding(.top, 200)
             }
-            HStack {
-                Button { close() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
-                    .glass(in: Circle(), interactive: true).foregroundStyle(.white)
-                Spacer()
-            }.padding(.horizontal, 16).padding(.top, 8)
+            if showClose || m.errorText != nil {
+                HStack {
+                    Button { close() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
+                        .glass(in: Circle(), interactive: true).foregroundStyle(.white)
+                    Spacer()
+                }.padding(.horizontal, 16).padding(.top, 8).transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.25), value: showClose)
+        .onAppear { scheduleHide() }
         .preferredColorScheme(.dark)
         .animation(.easeInOut, value: m.showBadges)
         .task { await m.start() }
         .onDisappear { m.stop() }
     }
     private func close() { m.stop(); dismiss() }
+
+    @State private var showClose = true
+    @State private var hideTask: Task<Void, Never>?
+    /// The system controls toggle on tap and fade after a few seconds; mirror that for the close button.
+    private func toggleClose() {
+        showClose.toggle()
+        if showClose { scheduleHide() } else { hideTask?.cancel() }
+    }
+    private func scheduleHide() {
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled else { return }
+            if m.player.rate > 0 { showClose = false }
+        }
+    }
 }
