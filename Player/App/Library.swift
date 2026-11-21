@@ -59,9 +59,8 @@ final class LibraryStore: ObservableObject {
     @Published var foldersLeft = 0
     @Published var matching = false
     var countLine: String? {
-        if matching { return "已找到 \(scanFound) 个文件，已完成 \(scanDone) 个，剩余 \(max(0, scanFound - scanDone)) 个" }
-        if scanFound > 0 || foldersLeft > 0 { return "已找到 \(scanFound) 个文件，剩余 \(foldersLeft) 个文件夹待读取" }
-        return nil
+        guard scanning else { return nil }
+        return "已找到 \(scanFound) 个文件，已完成 \(min(scanDone, scanFound)) 个，剩余 \(max(0, scanFound - scanDone)) 个"
     }
     private var enriching = false
 
@@ -187,17 +186,76 @@ final class LibraryStore: ObservableObject {
         } while rescanPending
     }
 
+    private var crawlActive = false
+    private var matchTried = Set<String>()
+
     private func scanOnce(force: Bool) async {
         scanning = true
-        scanFound = 0; scanDone = 0; foldersLeft = 0; matching = false
-        defer { scanning = false; matching = false; progress = "" }
+        scanFound = 0; scanDone = 0; foldersLeft = 0; matching = true
+        crawlActive = true
+        matchTried = []
+        defer { scanning = false; matching = false; crawlActive = false; progress = "" }
+        let before = Set(items.flatMap { $0.files.map(\.id) })
+        let folderSnapshot = folders
+
+        // show videos as soon as their folder is read, and match posters while the crawl goes on
+        let publisher = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled else { return }
+                let f = ScanCenter.shared.snapshotFound(folderSnapshot)
+                let (built, _) = self.buildItems(f, current: self.items)
+                let have = Set(built.map(\.id))
+                self.items = built + self.items.filter { !have.contains($0.id) }   // nothing disappears mid-scan
+                self.refreshCounts()
+            }
+        }
+        let matcher = Task { @MainActor [weak self] in await self?.matchLoop() }
+
         let outcome = await ScanCenter.shared.collect(folders, force: force, counts: { [weak self] found, left in
-            self?.scanFound = found; self?.foldersLeft = left
+            self?.foldersLeft = left
+            if let self, found > self.scanFound { self.scanFound = found }
         }) { [weak self] msg in self?.progress = msg }
+        publisher.cancel()
         let errors = outcome.errors
-        let found = outcome.found
         let failedFolders = outcome.failedFolders
 
+        let current = items
+        var (newItems, _) = buildItems(outcome.found, current: current)
+        let old = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // keep what we already had from folders that could not be fully read this time (rate limits etc.)
+        if !failedFolders.isEmpty {
+            let have = Set(newItems.flatMap { $0.files.map(\.id) })
+            for prev in old.values {
+                let keep = prev.files.filter { failedFolders.contains($0.file.meta["folder"] ?? "") && !have.contains($0.id) }
+                guard !keep.isEmpty else { continue }
+                if let i = newItems.firstIndex(where: { $0.id == prev.id }) { newItems[i].files += keep }
+                else { var p = prev; p.files = keep; newItems.append(p) }
+            }
+        }
+        items = newItems
+        let newFileCount = Set(newItems.flatMap { $0.files.map(\.id) }).subtracting(before).count
+        refreshCounts()
+        lastScan = Date()
+        UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
+        save()
+        if newItems.isEmpty {
+            lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
+        } else {
+            lastResult = "扫描完成：\(newItems.count) 部影片，新增 \(newFileCount) 个文件" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
+        }
+
+        // phase 2: TMDB only for what isn't matched yet (new / renamed), plus missing episode titles
+        crawlActive = false
+        progress = ""
+        await matcher.value
+        TMDBCache.shared.flush()
+        Task { await enrich() }
+        precachePosters(items)
+    }
+
+    /// Group found videos into library items, keeping whatever metadata `current` already has.
+    private func buildItems(_ found: [ScanFound], current: [LibraryItem]) -> ([LibraryItem], Int) {
         // group
         struct ScanGroup { var parsed: ParsedName; var files: [LibraryFile]; var serverPoster: URL?; var serverOverview: String? }
         var groups: [String: ScanGroup] = [:]
@@ -221,8 +279,8 @@ final class LibraryStore: ObservableObject {
             groups[key]?.files.append(lf)
         }
 
-        // phase 1: put every file in the library right away (no network), reusing what earlier scans matched
-        let old = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // put every file in the library right away (no network), reusing what earlier scans matched
+        let old = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var newItems: [LibraryItem] = []
         var newFileCount = 0
         for key in order {
@@ -251,52 +309,39 @@ final class LibraryStore: ObservableObject {
             }
             newItems.append(item)
         }
-        // keep what we already had from folders that could not be fully read this time (rate limits etc.)
-        if !failedFolders.isEmpty {
-            let have = Set(newItems.flatMap { $0.files.map(\.id) })
-            for prev in old.values {
-                let keep = prev.files.filter { failedFolders.contains($0.file.meta["folder"] ?? "") && !have.contains($0.id) }
-                guard !keep.isEmpty else { continue }
-                if let i = newItems.firstIndex(where: { $0.id == prev.id }) { newItems[i].files += keep }
-                else { var p = prev; p.files = keep; newItems.append(p) }
-            }
-        }
-        items = newItems
-        lastScan = Date()
-        UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
-        save()
-        if newItems.isEmpty {
-            lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
-        } else {
-            lastResult = "扫描完成：\(newItems.count) 部影片，新增 \(newFileCount) 个文件" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
-        }
-
-        // phase 2: TMDB only for what isn't matched yet (new / renamed), plus missing episode titles
-        await matchPending()
-        TMDBCache.shared.flush()
-        Task { await enrich() }
-        precachePosters(items)
+        return (newItems, newFileCount)
     }
 
-    private func matchPending() async {
-        let todoItems = items.filter { $0.tmdbId == nil || ($0.isTV && $0.files.contains { $0.episodeTitle == nil && $0.episode != nil }) }
-        let todo = todoItems.map(\.id)
-        let fileCount = Dictionary(uniqueKeysWithValues: todoItems.map { ($0.id, $0.files.count) })
-        scanFound = items.reduce(0) { $0 + $1.files.count }
-        scanDone = scanFound - todoItems.reduce(0) { $0 + $1.files.count }
-        matching = true
-        defer { matching = false }
+    private func needsMatch(_ it: LibraryItem) -> Bool {
+        it.tmdbId == nil || (it.isTV && it.files.contains { $0.episodeTitle == nil && $0.episode != nil })
+    }
+
+    private func refreshCounts() {
+        let total = items.reduce(0) { $0 + $1.files.count }
+        let pending = items.filter { needsMatch($0) && !matchTried.contains($0.id) }.reduce(0) { $0 + $1.files.count }
+        scanFound = max(total, crawlActive ? scanFound : 0)
+        scanDone = total - pending
+    }
+
+    /// Match posters for anything not matched yet; keeps waiting for new items while the crawl runs.
+    private func matchLoop() async {
         var done = 0
-        for id in todo {
+        while true {
+            if Task.isCancelled { return }
+            guard let next = items.first(where: { needsMatch($0) && !matchTried.contains($0.id) }) else {
+                if !crawlActive { break }
+                try? await Task.sleep(for: .seconds(1))
+                continue
+            }
+            let id = next.id
+            matchTried.insert(id)
             done += 1
-            if done > 1 { scanDone += fileCount[todo[done - 2]] ?? 0 }
             await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
-            guard let idx = items.firstIndex(where: { $0.id == id }) else { continue }
-            var item = items[idx]
-            progress = "正在匹配海报 \(done)/\(todo.count)：\(item.title)"
+            var item = next
+            if !crawlActive { progress = "正在匹配海报：\(item.title)" }
             if item.tmdbId == nil {
                 let p = ParsedName(title: item.title, year: item.year, season: nil, episode: nil)
-                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { continue }
+                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { refreshCounts(); continue }
                 item.title = m.title.isEmpty ? item.title : m.title
                 item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
                 item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id
@@ -313,8 +358,20 @@ final class LibraryStore: ObservableObject {
                     }
                 }
             }
-            guard let j = items.firstIndex(where: { $0.id == id }) else { continue }
-            items[j] = item
+            if let j = items.firstIndex(where: { $0.id == id }) {
+                // merge metadata only: the file list may have grown while we waited on TMDB
+                var cur = items[j]
+                cur.title = item.title; cur.originalTitle = item.originalTitle; cur.year = item.year; cur.overview = item.overview
+                cur.poster = item.poster; cur.backdrop = item.backdrop; cur.rating = item.rating; cur.tmdbId = item.tmdbId
+                cur.genres = item.genres; cur.kind = item.kind
+                for i in cur.files.indices {
+                    if let f = item.files.first(where: { $0.id == cur.files[i].id }), f.episodeTitle != nil {
+                        cur.files[i].episodeTitle = f.episodeTitle; cur.files[i].still = f.still
+                    }
+                }
+                items[j] = cur
+            }
+            refreshCounts()
             if done % 10 == 0 { save() }
         }
         save()

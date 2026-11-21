@@ -424,6 +424,22 @@ final class ScanCenter: ObservableObject {
         return out
     }
 
+    /// What the snapshots hold right now (no network) — used to show videos while a crawl is still running.
+    func snapshotFound(_ folders: [LibraryFolder]) -> [ScanFound] {
+        var found: [ScanFound] = []
+        for f in folders {
+            guard let src = SourceStore.shared.source(f.sourceId), !src.kind.isMediaServer else { continue }
+            if !f.dir.isDir {
+                var t = f.dir; t.meta["folder"] = f.id.uuidString
+                found.append(ScanFound(source: src, folder: f, file: t, parents: [], subs: []))
+                continue
+            }
+            let rootKey = f.dir.meta["root"] == "1" ? "__root__" : f.dir.id
+            assemble(src, f, rootKey: rootKey, rootParents: f.dir.meta["root"] == "1" ? [] : [f.dir.name], into: &found)
+        }
+        return found
+    }
+
     func isCancelled(_ id: UUID) -> Bool { cancelled.contains(id) || SourceStore.shared.source(id) == nil }
 
     /// Walk the snapshot tree (no network) and turn it into found videos.
