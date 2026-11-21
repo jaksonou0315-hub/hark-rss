@@ -63,7 +63,9 @@ struct PosterImage: View {
     var body: some View {
         AsyncImage(url: url, transaction: Transaction(animation: .easeOut)) { phase in
             switch phase {
-            case .success(let img): img.resizable().scaledToFill()
+            case .success(let img):
+                // fill the frame but never spill past it: Color sizes to the proposed frame, the image is an overlay
+                Color.clear.overlay { img.resizable().scaledToFill().allowsHitTesting(false) }.clipped()
             default:
                 ZStack {
                     LinearGradient(colors: [.indigo.opacity(0.6), .purple.opacity(0.4)], startPoint: .top, endPoint: .bottom)

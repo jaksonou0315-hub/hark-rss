@@ -521,6 +521,7 @@ struct PosterTile: View {
                 .font(.caption).foregroundStyle(.white.opacity(0.6))
         }
         .frame(width: width)
+        .contentShape(Rectangle())        // taps land on this tile only
     }
 }
 
@@ -530,7 +531,7 @@ struct ContinueCard: View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack {
                 PosterImage(url: entry.file.still ?? entry.item.backdrop ?? entry.item.poster, title: "")
-                    .frame(width: 214, height: 120).clipped()
+                    .frame(width: 214, height: 120).clipped().contentShape(Rectangle())
                 Image(systemName: "play.fill").font(.title3).foregroundStyle(.white)
                     .frame(width: 46, height: 46).glass(in: Circle())
                 VStack(spacing: 4) {
