@@ -101,6 +101,8 @@ struct DetailView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .toolbarVisibility(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .tabBar)
         .foregroundStyle(.white)
         .task(id: itemId) {

@@ -338,7 +338,7 @@ struct PlayerView: View {
             }
             .ignoresSafeArea()
 
-            if c.buffering && c.errorText == nil {
+            if c.buffering && c.errorText == nil && !showControls {
                 ProgressView().controlSize(.large).tint(.white)
                     .padding(22).glass(in: Circle())
             }
@@ -444,7 +444,11 @@ struct PlayerView: View {
                     Button { c.skip(-10); scheduleHide() } label: { Image(systemName: "gobackward.10").font(.title2).frame(width: 60, height: 60) }
                         .glass(in: Circle(), interactive: true)
                     Button { c.toggle(); scheduleHide() } label: {
-                        Image(systemName: c.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 34)).frame(width: 84, height: 84)
+                        Group {
+                            if c.buffering && c.errorText == nil { ProgressView().controlSize(.large).tint(.white) }
+                            else { Image(systemName: c.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 34)) }
+                        }
+                        .frame(width: 84, height: 84)
                     }
                     .glass(in: Circle(), interactive: true)
                     Button { c.skip(10); scheduleHide() } label: { Image(systemName: "goforward.10").font(.title2).frame(width: 60, height: 60) }
