@@ -188,12 +188,41 @@ final class LibraryStore: ObservableObject {
 
     private var crawlActive = false
     private var matchTried = Set<String>()
+    /// New items still waiting for their poster: kept out of the library until matched (or the match fails).
+    private var staged: [String: LibraryItem] = [:]
+    private var stagedOrder: [String] = []
+    private var knownIds = Set<String>()
+    private var inMatch: String?
+
+    /// Split freshly built items: anything already shown, matched, or with a server poster goes in;
+    /// brand-new unmatched ones wait in `staged` until matchLoop has tried them.
+    private func publish(_ built: [LibraryItem], keepMissing: Bool) {
+        var visible: [LibraryItem] = []
+        for it in built {
+            let ready = it.tmdbId != nil || it.poster != nil || knownIds.contains(it.id) || (matchTried.contains(it.id) && inMatch != it.id)
+            if ready { visible.append(it); staged[it.id] = nil }
+            else {
+                if staged[it.id] == nil { stagedOrder.append(it.id) }
+                staged[it.id] = it
+            }
+        }
+        if keepMissing {
+            let have = Set(built.map(\.id))
+            visible += items.filter { !have.contains($0.id) }          // nothing disappears mid-scan
+        }
+        // keep current order for items already shown so shelves don't jump around
+        let pos = Dictionary(items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        items = visible.sorted { (pos[$0.id] ?? Int.max) < (pos[$1.id] ?? Int.max) }
+        refreshCounts()
+    }
 
     private func scanOnce(force: Bool) async {
         scanning = true
         scanFound = 0; scanDone = 0; foldersLeft = 0; matching = true
         crawlActive = true
         matchTried = []
+        staged = [:]; stagedOrder = []
+        knownIds = Set(items.map(\.id))
         defer { scanning = false; matching = false; crawlActive = false; progress = "" }
         let before = Set(items.flatMap { $0.files.map(\.id) })
         let folderSnapshot = folders
@@ -204,10 +233,8 @@ final class LibraryStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled else { return }
                 let f = ScanCenter.shared.snapshotFound(folderSnapshot)
-                let (built, _) = self.buildItems(f, current: self.items)
-                let have = Set(built.map(\.id))
-                self.items = built + self.items.filter { !have.contains($0.id) }   // nothing disappears mid-scan
-                self.refreshCounts()
+                let (built, _) = self.buildItems(f, current: self.items + Array(self.staged.values))
+                self.publish(built, keepMissing: true)
             }
         }
         let matcher = Task { @MainActor [weak self] in await self?.matchLoop() }
@@ -220,7 +247,7 @@ final class LibraryStore: ObservableObject {
         let errors = outcome.errors
         let failedFolders = outcome.failedFolders
 
-        let current = items
+        let current = items + Array(staged.values)
         var (newItems, _) = buildItems(outcome.found, current: current)
         let old = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // keep what we already had from folders that could not be fully read this time (rate limits etc.)
@@ -233,9 +260,9 @@ final class LibraryStore: ObservableObject {
                 else { var p = prev; p.files = keep; newItems.append(p) }
             }
         }
-        items = newItems
         let newFileCount = Set(newItems.flatMap { $0.files.map(\.id) }).subtracting(before).count
-        refreshCounts()
+        staged = [:]; stagedOrder = []
+        publish(newItems, keepMissing: false)
         lastScan = Date()
         UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
         save()
@@ -312,15 +339,25 @@ final class LibraryStore: ObservableObject {
         return (newItems, newFileCount)
     }
 
+    /// Move a staged item into the library (matched, or TMDB had nothing for it).
+    private func reveal(_ id: String) {
+        if let it = staged.removeValue(forKey: id) {
+            stagedOrder.removeAll { $0 == id }
+            if let j = items.firstIndex(where: { $0.id == it.id }) { items[j] = it } else { items.insert(it, at: 0) }
+        }
+        refreshCounts()
+    }
+
     private func needsMatch(_ it: LibraryItem) -> Bool {
         it.tmdbId == nil || (it.isTV && it.files.contains { $0.episodeTitle == nil && $0.episode != nil })
     }
 
     private func refreshCounts() {
-        let total = items.reduce(0) { $0 + $1.files.count }
+        let stagedFiles = staged.values.reduce(0) { $0 + $1.files.count }
+        let total = items.reduce(0) { $0 + $1.files.count } + stagedFiles
         let pending = items.filter { needsMatch($0) && !matchTried.contains($0.id) }.reduce(0) { $0 + $1.files.count }
         scanFound = max(total, crawlActive ? scanFound : 0)
-        scanDone = total - pending
+        scanDone = total - stagedFiles - pending
     }
 
     /// Match posters for anything not matched yet; keeps waiting for new items while the crawl runs.
@@ -328,20 +365,23 @@ final class LibraryStore: ObservableObject {
         var done = 0
         while true {
             if Task.isCancelled { return }
-            guard let next = items.first(where: { needsMatch($0) && !matchTried.contains($0.id) }) else {
+            let stagedNext = stagedOrder.lazy.compactMap { self.staged[$0] }.first
+            guard let next = stagedNext ?? items.first(where: { needsMatch($0) && !matchTried.contains($0.id) }) else {
                 if !crawlActive { break }
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
             let id = next.id
             matchTried.insert(id)
+            inMatch = id
+            defer { inMatch = nil }
             done += 1
             await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
             var item = next
             if !crawlActive { progress = "正在匹配海报：\(item.title)" }
             if item.tmdbId == nil {
                 let p = ParsedName(title: item.title, year: item.year, season: nil, episode: nil)
-                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { refreshCounts(); continue }
+                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { reveal(id); continue }
                 item.title = m.title.isEmpty ? item.title : m.title
                 item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
                 item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id
@@ -358,7 +398,19 @@ final class LibraryStore: ObservableObject {
                     }
                 }
             }
-            if let j = items.firstIndex(where: { $0.id == id }) {
+            if var st = staged[id] {
+                // first time it shows up: with its poster already in place
+                st.title = item.title; st.originalTitle = item.originalTitle; st.year = item.year; st.overview = item.overview
+                st.poster = item.poster; st.backdrop = item.backdrop; st.rating = item.rating; st.tmdbId = item.tmdbId
+                st.genres = item.genres; st.kind = item.kind
+                for i in st.files.indices {
+                    if let f = item.files.first(where: { $0.id == st.files[i].id }), f.episodeTitle != nil {
+                        st.files[i].episodeTitle = f.episodeTitle; st.files[i].still = f.still
+                    }
+                }
+                staged[id] = st
+                reveal(id)
+            } else if let j = items.firstIndex(where: { $0.id == id }) {
                 // merge metadata only: the file list may have grown while we waited on TMDB
                 var cur = items[j]
                 cur.title = item.title; cur.originalTitle = item.originalTitle; cur.year = item.year; cur.overview = item.overview
