@@ -196,6 +196,9 @@ final class AppSettings: ObservableObject {
     @Published var bilingualSubs: Bool { didSet { d.set(bilingualSubs, forKey: "bilingual") } }
     @Published var nativeEngine: Bool { didSet { d.set(nativeEngine, forKey: "nativeEngine") } }
     @Published var dolbyStereo: Bool { didSet { d.set(dolbyStereo, forKey: "dolbyStereo") } }
+    @Published var mkvEngine: EngineKind = EngineKind(rawValue: UserDefaults.standard.string(forKey: "mkvEngine") ?? "") ?? .auto {
+        didSet { d.set(mkvEngine.rawValue, forKey: "mkvEngine") }
+    }
 
     private init() {
         tmdbKey = Keychain.get("tmdbKey") ?? ""

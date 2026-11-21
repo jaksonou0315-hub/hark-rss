@@ -16,16 +16,12 @@ struct TrackInfo: Identifiable, Hashable { var id: Int32; var name: String }
 
 @MainActor
 final class PlayerController: NSObject, ObservableObject {
-    let player: VLCMediaPlayer = {
-        var o = SubtitleStyle.shared.vlcOptions
-        if AppSettings.shared.dolbyStereo { o.append("--stereo-mode=1") }
-        return VLCMediaPlayer(options: o)
-    }()
+    let engine: MediaEngine
     private var styleSub: AnyCancellable?
     @Published var badges: [String] = []
     private var didBadge = false
     let request: PlayRequest
-    let videoView = UIView()
+    var videoView: UIView { engine.view }
 
     @Published var title: String
     @Published var isPlaying = false
@@ -58,33 +54,16 @@ final class PlayerController: NSObject, ObservableObject {
     init(_ r: PlayRequest) {
         request = r
         title = r.title ?? (r.file.name as NSString).deletingPathExtension
+        let localCopy = DownloadStore.shared.localURL(r.source.id.uuidString + ":" + r.file.id) != nil
+        engine = EngineChooser.useMPV(r, local: localCopy) ? MPVEngine() : VLCEngine()
         super.init()
-        videoView.backgroundColor = .black
-        player.drawable = videoView
         captioner.bridge = bridge
         styleSub = SubtitleStyle.shared.objectWillChange
             .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.applySubtitleStyleLive() }
     }
 
-    /// Push the current subtitle style into the running renderer and redraw the active track.
-    func applySubtitleStyleLive() {
-        let st = SubtitleStyle.shared
-        let p = player as NSObject
-        func call(_ name: String, _ v: Any) {
-            let sel = NSSelectorFromString(name)
-            if p.responds(to: sel) { p.perform(sel, with: v) }
-        }
-        call("setTextRendererFont:", st.vlcFontName as NSString)
-        call("setTextRendererFontSize:", NSNumber(value: st.vlcRelFontSize))
-        call("setTextRendererFontColor:", NSNumber(value: st.color))
-        call("setTextRendererFontForceBold:", NSNumber(value: st.bold))
-        let cur = player.currentVideoSubTitleIndex
-        if cur >= 0 {
-            player.currentVideoSubTitleIndex = -1
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.player.currentVideoSubTitleIndex = cur }
-        }
-    }
+    func applySubtitleStyleLive() { engine.applySubtitleStyle() }
 
     func start() async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -93,10 +72,7 @@ final class PlayerController: NSObject, ObservableObject {
         do {
             let p = try await DownloadStore.shared.playable(provider, request.file)
             playable = p
-            let media = VLCMedia(url: p.url)
-            for o in p.vlcOptions { media.addOption(o) }
-            player.media = media
-            player.play()
+            engine.open(p)
             startedAt = Date()
             startTimer()
             // sidecar subtitles: server-provided URLs + files next to the video (downloaded and re-encoded to UTF-8)
@@ -126,27 +102,31 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     private func tick() {
-        if isPlaying != player.isPlaying { isPlaying = player.isPlaying }
-        let st = player.state
-        let buf = (st == .opening || st == .buffering) && !player.isPlaying
+        let st = engine.state
+        let playing = engine.isPlaying
+        if isPlaying != playing { isPlaying = playing }
+        let buf = (st == .opening || st == .buffering) && !playing
         if buf != buffering { buffering = buf }
-        let nt = player.time.intValue
+        let nt = engine.timeMs
         if nt != timeMs { timeMs = nt }
-        let nl = player.media?.length.intValue ?? 0
+        let nl = engine.lengthMs
         if nl != lengthMs { lengthMs = nl }
-        if lengthMs > 0, player.position != position { position = player.position }
-        if st == .error, errorText == nil { errorText = "无法播放此文件（网络错误或格式不受支持）" }
-        if st == .ended || (st == .stopped && timeMs > 0 && lengthMs > 0 && lengthMs - timeMs < 3000) {
+        if lengthMs > 0 { let p = engine.position; if p != position { position = p } }
+        if st == .error, errorText == nil {
+            errorText = (engine as? MPVEngine)?.errorText ?? "无法播放此文件（网络错误或格式不受支持）"
+            buffering = false
+        }
+        if st == .ended, !ended {
             ended = true
             if let k = playable?.resumeKey { Resume.clear(k) }
         }
-        guard player.isPlaying else { return }
+        guard playing else { return }
 
         if !pendingSubs.isEmpty {
             let subs = pendingSubs
             pendingSubs = []
             for (i, u) in subs.enumerated() {
-                player.addPlaybackSlave(u, type: .subtitle, enforce: i == 0)
+                engine.addSubtitle(u, select: i == 0)
             }
             didPickTrack = true
             toast = "已加载 \(subs.count) 个外挂字幕"
@@ -155,7 +135,7 @@ final class PlayerController: NSObject, ObservableObject {
             didResume = true
             let ms = Resume.get(k)
             if ms > 10_000, lengthMs == 0 || ms < lengthMs - 15_000 {
-                player.time = VLCTime(int: ms)
+                engine.seek(ms: ms)
                 toast = "已从 \(Self.fmt(ms)) 继续播放"
             }
         } else if let k = playable?.resumeKey, timeMs > 0, Int(timeMs) % 5000 < 450 {
@@ -178,37 +158,28 @@ final class PlayerController: NSObject, ObservableObject {
     private func computeBadges() {
         var b: [String] = []
         let name = request.file.name
-        if DolbyBadges.nameHintsDV(name) { b.append("杜比视界") }
-        let infos = (player.media?.tracksInformation as? [[String: Any]]) ?? []
-        var audio: String?
-        for t in infos where (t[VLCMediaTracksInformationType] as? String) == VLCMediaTracksInformationTypeAudio {
-            if let c = (t[VLCMediaTracksInformationCodec] as? NSNumber)?.uint32Value, let a = DolbyBadges.audioBadge(fourcc: c) {
-                if audio == nil || a == "Dolby TrueHD" { audio = a }
-            }
-        }
+        let dv = engine.reportsDolbyVision || DolbyBadges.nameHintsDV(name)
+        if dv { b.append("杜比视界") }
+        let audio = engine.audioBadge
         if var a = audio {
             if DolbyBadges.nameHintsAtmos(name), a != "DTS" { a = "杜比全景声" }
             b.append(a)
         }
         badges = b
-        if b.contains("杜比视界") {
+        if b.contains("杜比视界") && engine is VLCEngine {
             toast = EngineChooser.nativeExts.contains(request.file.ext)
                 ? "杜比视界：请在设置里打开「苹果原生内核」以正确显示色彩"
-                : "MKV 杜比视界色彩可能不准，建议用 MP4 版本（走原生内核）"
+                : "VLC 内核显示杜比视界色彩不准，可在设置里把「MKV 播放内核」改为 MPV"
         }
         Task { try? await Task.sleep(nanoseconds: 5_000_000_000); badges = [] }
     }
 
     private func refreshTracks() {
-        let sn = (player.videoSubTitlesNames as? [String]) ?? []
-        let si = (player.videoSubTitlesIndexes as? [NSNumber]) ?? []
-        let subs = zip(si, sn).map { TrackInfo(id: $0.int32Value, name: $1) }
+        let subs = engine.subtitleTracks
         if subs != subtitleTracks { subtitleTracks = subs }
-        let an = (player.audioTrackNames as? [String]) ?? []
-        let ai = (player.audioTrackIndexes as? [NSNumber]) ?? []
-        let auds = zip(ai, an).map { TrackInfo(id: $0.int32Value, name: $1) }
+        let auds = engine.audioTracks
         if auds != audioTracks { audioTracks = auds }
-        let cs = player.currentVideoSubTitleIndex, ca = player.currentAudioTrackIndex
+        let cs = engine.currentSub, ca = engine.currentAudio
         if cs != currentSub { currentSub = cs }
         if ca != currentAudio { currentAudio = ca }
     }
@@ -228,7 +199,7 @@ final class PlayerController: NSObject, ObservableObject {
     func loadOnline(_ s: OnlineSubtitle) async {
         do {
             let f = try await SubtitleService.fetch(s)
-            player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            engine.addSubtitle(f, select: true)
             loadedSubs.append((s.title, f))
             toast = "已加载字幕：\(s.title)"
         } catch {
@@ -237,15 +208,21 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     // MARK: controls
-    func toggle() { if player.isPlaying { player.pause() } else { player.play() }; isPlaying.toggle() }
-    func skip(_ s: Int32) { if s > 0 { player.jumpForward(s) } else { player.jumpBackward(-s) } }
-    func seek(_ p: Float) { player.position = p; position = p }
-    func selectSub(_ id: Int32) { player.currentVideoSubTitleIndex = id; currentSub = id }
-    func selectAudio(_ id: Int32) { player.currentAudioTrackIndex = id; currentAudio = id }
-    func setRate(_ r: Float) { player.rate = r; rate = r }
+    func toggle() {
+        if engine.isPlaying { engine.pause() } else {
+            if ended { engine.seek(ms: 0); ended = false }
+            engine.play()
+        }
+        isPlaying.toggle()
+    }
+    func skip(_ s: Int32) { engine.jump(seconds: s) }
+    func seek(_ p: Float) { engine.seek(position: p); position = p }
+    func selectSub(_ id: Int32) { engine.selectSub(id); currentSub = id }
+    func selectAudio(_ id: Int32) { engine.selectAudio(id); currentAudio = id }
+    func setRate(_ r: Float) { engine.setRate(r); rate = r }
     func shiftSubDelay(_ ms: Int) {
         subDelayMs += ms
-        player.currentVideoSubTitleDelay = subDelayMs * 1000
+        engine.setSubDelay(ms: subDelayMs)
         toast = "字幕延迟 \(String(format: "%.1f", Double(subDelayMs) / 1000)) 秒"
     }
 
@@ -264,7 +241,7 @@ final class PlayerController: NSObject, ObservableObject {
         defer { translating = false }
         do {
             let f = try await SubtitleTranslator.translateFile(url, bridge: bridge, bilingual: AppSettings.shared.bilingualSubs)
-            player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            engine.addSubtitle(f, select: true)
             didPickTrack = true
             toast = "已切换到翻译字幕"
         } catch {
@@ -281,7 +258,7 @@ final class PlayerController: NSObject, ObservableObject {
             let f = try await AITranslator.translateFile(url, bilingual: AppSettings.shared.bilingualSubs) { [weak self] d, t in
                 if t > 1, d < t { self?.toast = "AI 翻译中 \(d * 100 / t)%" }
             }
-            player.addPlaybackSlave(f, type: .subtitle, enforce: true)
+            engine.addSubtitle(f, select: true)
             loadedSubs.append(("AI 译 · " + name, f))
             didPickTrack = true
             toast = "已切换到 AI 翻译字幕"
@@ -295,7 +272,7 @@ final class PlayerController: NSObject, ObservableObject {
         if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs, total: lengthMs) }
         timer?.invalidate()
         timer = nil
-        player.stop()
+        engine.stop()
     }
 
     static func fmt(_ ms: Int32) -> String {

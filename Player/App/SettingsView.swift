@@ -76,8 +76,11 @@ struct SettingsView: View {
                     Toggle("记住播放进度", isOn: $settings.resumePlayback)
                     Toggle("MP4/MOV 用苹果原生内核", isOn: $settings.nativeEngine)
                     Toggle("杜比音轨兼容模式", isOn: $settings.dolbyStereo)
+                    Picker("MKV 等格式播放内核", selection: $settings.mkvEngine) {
+                        ForEach(EngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
                 } header: { Text("播放") } footer: {
-                    Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。兼容模式会把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。")
+                    Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。兼容模式会把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。MKV 内核选「自动」时，文件名带杜比视界 / HDR / 4K / HEVC / Atmos / TrueHD 的用 MPV（能正确显示杜比视界色彩），其他用 VLC；SMB 在线播放始终用 VLC。")
                 }
 
                 Section("媒体库") {
