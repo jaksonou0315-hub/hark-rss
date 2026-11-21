@@ -258,6 +258,7 @@ struct TMDBDetails {
     var cast: [TMDBCast]
     var tagline: String?
     var certification: String?
+    var related: [Int] = []     // TMDB recommendations + similar, best first
 }
 
 extension TMDB {
@@ -272,7 +273,7 @@ extension TMDB {
         let lang = AppSettings.shared.tmdbLanguage
         let short = String(lang.prefix(2))
         guard let r = request("/\(tv ? "tv" : "movie")/\(id)",
-                              ["append_to_response": tv ? "aggregate_credits,images,content_ratings" : "credits,images,release_dates",
+                              ["append_to_response": tv ? "aggregate_credits,images,content_ratings,recommendations,similar" : "credits,images,release_dates,recommendations,similar",
                                "include_image_language": "\(short),en,null"]),
               let o = try? await HTTP.json(r) else { return nil }
         let rawDate = o.str(tv ? "first_air_date" : "release_date") ?? ""
@@ -321,7 +322,14 @@ extension TMDB {
                             runtime: o.int("runtime"),
                             cast: cast,
                             tagline: o.str("tagline"),
-                            certification: cert)
+                            certification: cert,
+                            related: {
+                                var seen = Set<Int>(); var out: [Int] = []
+                                for k in ["recommendations", "similar"] {
+                                    for r in o.dict(k)?.arr("results") ?? [] { if let i = r.int("id"), seen.insert(i).inserted { out.append(i) } }
+                                }
+                                return out
+                            }())
         store(key, d)
         return d
     }

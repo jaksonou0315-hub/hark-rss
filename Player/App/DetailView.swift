@@ -69,6 +69,7 @@ struct DetailView: View {
     @State private var expanded = false
     @State private var showAllEpisodes = false
     @State private var showEdit = false
+    @State private var barsVisible = true
     @State private var confirmRemove = false
     @ObservedObject private var dl = DownloadStore.shared
 
@@ -96,7 +97,15 @@ struct DetailView: View {
                     }
                     .scrollIndicators(.hidden)
                     .ignoresSafeArea(edges: .top)
+                    .onScrollGeometryChange(for: Bool.self) { g in
+                        g.contentOffset.y + g.contentInsets.top < 30
+                    } action: { _, atTop in
+                        if atTop != barsVisible { withAnimation(.easeInOut(duration: 0.2)) { barsVisible = atTop } }
+                    }
                     topBar(item)
+                        .opacity(barsVisible ? 1 : 0)
+                        .offset(y: barsVisible ? 0 : -20)
+                        .allowsHitTesting(barsVisible)
                 }
             }
         }
@@ -399,11 +408,36 @@ struct DetailView: View {
         }
     }
 
+    /// 相关推荐: library items TMDB lists as recommended/similar first, then items sharing the most genres.
+    private func related(_ item: LibraryItem) -> [LibraryItem] {
+        let others = library.items.filter { $0.id != item.id && $0.tmdbId != nil }
+        var out: [LibraryItem] = []
+        var used = Set<String>()
+        if let ids = details?.related, !ids.isEmpty {
+            let byTmdb = Dictionary(others.map { ($0.tmdbId!, $0) }, uniquingKeysWith: { a, _ in a })
+            for id in ids { if let it = byTmdb[id], used.insert(it.id).inserted { out.append(it) } }
+        }
+        let g = Set(details?.genres ?? item.genres ?? [])
+        if !g.isEmpty {
+            let scored = others.filter { !used.contains($0.id) }
+                .map { it -> (LibraryItem, Int) in
+                    var sc = Set(it.genres ?? []).intersection(g).count * 10
+                    if sc > 0 && it.kind == item.kind { sc += 3 }
+                    if sc > 0, let a = it.year, let b = item.year, abs(a - b) <= 5 { sc += 1 }
+                    return (it, sc)
+                }
+                .filter { $0.1 >= 10 }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : ($0.0.rating ?? 0) > ($1.0.rating ?? 0) }
+            out += scored.map(\.0)
+        }
+        return Array(out.prefix(20))
+    }
+
     @ViewBuilder private func recent(_ item: LibraryItem) -> some View {
-        let list = Array(library.items.sorted { $0.added > $1.added }.prefix(15))
-        if list.count > 1 {
+        let list = related(item)
+        if !list.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("最近添加").font(.title2.bold()).padding(.horizontal, 20)
+                Text("相关推荐").font(.title2.bold()).padding(.horizontal, 20)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(list) { it in
@@ -418,8 +452,6 @@ struct DetailView: View {
                                                     .shadow(color: .black, radius: 3)
                                             }
                                         }
-                                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .stroke(Color.white, lineWidth: it.id == item.id ? 3 : 0).padding(-3))
                                     Text(it.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                                     Text(it.isTV ? "共\(max(1, it.seasons.count))季" : (it.year.map { String($0) } ?? "电影"))
                                         .font(.caption).foregroundStyle(.white.opacity(0.6))
@@ -427,7 +459,6 @@ struct DetailView: View {
                                 .frame(width: 124)
                             }
                             .buttonStyle(.plain)
-                            .disabled(it.id == item.id)
                         }
                     }
                     .padding(.horizontal, 20).padding(.vertical, 3)
