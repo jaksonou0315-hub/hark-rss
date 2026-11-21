@@ -71,6 +71,7 @@ struct DetailView: View {
     @State private var showEdit = false
     @State private var barsVisible = true
     @State private var confirmRemove = false
+    @State private var openRelated: LibraryItem?
     @ObservedObject private var dl = DownloadStore.shared
 
     private var item: LibraryItem? { library.items.first { $0.id == itemId } }
@@ -130,6 +131,7 @@ struct DetailView: View {
             Button("移除", role: .destructive) { library.removeItem(itemId); dismiss() }
         } message: { Text("网盘里的文件不会被删除，可在 设置 › 媒体库 里恢复。") }
         .overlay(alignment: .bottom) { downloadBadge }
+        .navigationDestination(item: $openRelated) { DetailView(itemId: $0.id) }
         .sheet(isPresented: $showAllEpisodes) {
             if let item { AllEpisodesSheet(item: item, season: $season, play: { play($0, item) }) }
         }
@@ -445,7 +447,7 @@ struct DetailView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(list) { it in
-                            NavigationLink(value: it) {
+                            Button { openRelated = it } label: {
                                 VStack(alignment: .leading, spacing: 5) {
                                     PosterImage(url: it.poster, title: it.title)
                                         .frame(width: 124, height: 180)
@@ -461,6 +463,7 @@ struct DetailView: View {
                                         .font(.caption).foregroundStyle(.white.opacity(0.6))
                                 }
                                 .frame(width: 124)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
