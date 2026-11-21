@@ -317,7 +317,7 @@ final class ScanCenter: ObservableObject {
         switch s.kind {
         case .local, .smb, .emby, .jellyfin: ms = 0
         case .webdav: ms = 150
-        default: ms = 500        // cloud drives: be gentle by default
+        default: ms = 300        // cloud drives: be gentle by default
         }
         let g = SourceGate(minDelayMs: ms)
         gates[s.id] = g
@@ -574,14 +574,16 @@ private final class CrawlRun {
             pending.removeAll()
             return
         }
-        let mustList = force || job.retry > 0 || db.isDue(key)
+        // force = relist anything not verified in the last 15 min, so an interrupted full rescan resumes where it stopped
+        let recent = db[key].map { Date().timeIntervalSince($0.verifiedAt) < 900 } ?? false
+        let mustList = job.retry > 0 || (force ? !recent : db.isDue(key))
         if !mustList, let snap = db[key] {
             visited.insert(key)
             skipped += 1
             expand(job, snap.children)
             return
         }
-        progress("正在扫描 \(job.dir?.name ?? source.name)…")
+        progress("正在扫描（已读 \(listed) 个文件夹，剩 \(pending.count + inFlight.count)）\(job.dir?.name ?? source.name)")
         let provider = SourceStore.shared.provider(for: source)
         do {
             try await gate.waitTurn()
@@ -591,6 +593,7 @@ private final class CrawlRun {
             listed += 1
             visited.insert(key)
             db.store(job.dir, listing: list)
+            if listed % 25 == 0 { db.flush() }      // survive the app being suspended / killed mid-scan
             expand(job, db[key]?.children ?? [])
         } catch {
             if error is CancellationError { return }

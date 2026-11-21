@@ -209,64 +209,33 @@ final class LibraryStore: ObservableObject {
             groups[key]?.files.append(lf)
         }
 
-        // match with TMDB
+        // phase 1: put every file in the library right away (no network), reusing what earlier scans matched
         let old = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var newItems: [LibraryItem] = []
         var newFileCount = 0
-        var done = 0
         for key in order {
             guard let g = groups[key] else { continue }
-            done += 1
-            await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
-            progress = "正在匹配海报 \(done)/\(order.count)：\(g.parsed.title)"
             let isTV = g.parsed.isEpisode
             var item = LibraryItem(id: key, kind: isTV ? "tv" : "movie", title: g.parsed.title, year: g.parsed.year,
                                    overview: g.serverOverview, poster: g.serverPoster, files: g.files)
             if let prev = old[key] {
-                // keep the original date; bump it when new files appeared so the show moves to the front of 最近添加
                 let prevIds = Set(prev.files.map(\.id))
                 let fresh = g.files.filter { !prevIds.contains($0.id) }.count
-                item.added = fresh > 0 ? Date() : prev.added
+                item.added = fresh > 0 ? Date() : prev.added      // new episodes move the show to the front of 最近添加
                 newFileCount += fresh
-            } else {
-                newFileCount += g.files.count
-            }
-            if let prev = old[key], prev.tmdbId != nil {
-                item.title = prev.title; item.originalTitle = prev.originalTitle; item.year = prev.year; item.overview = prev.overview
-                item.poster = prev.poster; item.backdrop = prev.backdrop; item.rating = prev.rating; item.tmdbId = prev.tmdbId
-                item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries
-                for i in item.files.indices {
-                    if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
-                        item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
-                    }
-                }
-            } else if let m = await TMDB.search(title: g.parsed.title, year: g.parsed.year, tv: isTV) {
-                item.title = m.title.isEmpty ? item.title : m.title
-                item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
-                item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id
-                let gs = m.genreIds.compactMap { TMDB.genreName($0) }
-                if !gs.isEmpty { item.genres = gs }
-                if m.kind == "tv" {
-                    item.kind = "tv"
-                    for s in Set(item.files.compactMap { $0.season }) {
-                        let eps = await TMDB.season(tvId: m.id, season: s)
-                        for i in item.files.indices where item.files[i].season == s {
-                            if let e = item.files[i].episode, let info = eps[e] {
-                                item.files[i].episodeTitle = info.name; item.files[i].still = info.still
-                            }
+                if prev.tmdbId != nil {
+                    item.title = prev.title; item.originalTitle = prev.originalTitle; item.year = prev.year; item.overview = prev.overview
+                    item.poster = prev.poster; item.backdrop = prev.backdrop; item.rating = prev.rating; item.tmdbId = prev.tmdbId
+                    item.kind = prev.kind
+                    item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries
+                    for i in item.files.indices {
+                        if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
+                            item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
                         }
                     }
                 }
-            }
-            // new episodes of a show we already matched: fill titles from the (cached) season, once per season
-            if item.isTV, let tid = item.tmdbId {
-                let missing = Set(item.files.filter { $0.episodeTitle == nil && $0.episode != nil }.compactMap { $0.season })
-                for sn in missing {
-                    let eps = await TMDB.season(tvId: tid, season: sn)
-                    for i in item.files.indices where item.files[i].season == sn && item.files[i].episodeTitle == nil {
-                        if let e = item.files[i].episode, let info = eps[e] { item.files[i].episodeTitle = info.name; item.files[i].still = info.still }
-                    }
-                }
+            } else {
+                newFileCount += g.files.count
             }
             newItems.append(item)
         }
@@ -284,13 +253,51 @@ final class LibraryStore: ObservableObject {
         lastScan = Date()
         UserDefaults.standard.set(lastScan, forKey: "lib.lastScan")
         save()
-        TMDBCache.shared.flush()
-        Task { await enrich() }
-        precachePosters(newItems)
         if newItems.isEmpty {
             lastResult = errors.first.map { "扫描失败：\($0)" } ?? (folders.isEmpty ? nil : "没在这些文件夹里找到视频文件")
         } else {
             lastResult = "扫描完成：\(newItems.count) 部影片，新增 \(newFileCount) 个文件" + (errors.isEmpty ? "" : "（\(errors.count) 个文件夹读取失败）")
         }
+
+        // phase 2: TMDB only for what isn't matched yet (new / renamed), plus missing episode titles
+        await matchPending()
+        TMDBCache.shared.flush()
+        Task { await enrich() }
+        precachePosters(items)
+    }
+
+    private func matchPending() async {
+        let todo = items.filter { $0.tmdbId == nil || ($0.isTV && $0.files.contains { $0.episodeTitle == nil && $0.episode != nil }) }.map(\.id)
+        var done = 0
+        for id in todo {
+            done += 1
+            await AppActivity.shared.waitUntilActive()     // pause (not drop) metadata work while in background
+            guard let idx = items.firstIndex(where: { $0.id == id }) else { continue }
+            var item = items[idx]
+            progress = "正在匹配海报 \(done)/\(todo.count)：\(item.title)"
+            if item.tmdbId == nil {
+                let p = ParsedName(title: item.title, year: item.year, season: nil, episode: nil)
+                guard let m = await TMDB.search(title: p.title, year: p.year, tv: item.isTV) else { continue }
+                item.title = m.title.isEmpty ? item.title : m.title
+                item.originalTitle = m.originalTitle; item.year = m.year ?? item.year; item.overview = m.overview ?? item.overview
+                item.poster = m.poster ?? item.poster; item.backdrop = m.backdrop; item.rating = m.rating; item.tmdbId = m.id
+                let gs = m.genreIds.compactMap { TMDB.genreName($0) }
+                if !gs.isEmpty { item.genres = gs }
+                if m.kind == "tv" { item.kind = "tv" }
+            }
+            if item.isTV, let tid = item.tmdbId {
+                let missing = Set(item.files.filter { $0.episodeTitle == nil && $0.episode != nil }.compactMap { $0.season })
+                for sn in missing {
+                    let eps = await TMDB.season(tvId: tid, season: sn)
+                    for i in item.files.indices where item.files[i].season == sn && item.files[i].episodeTitle == nil {
+                        if let e = item.files[i].episode, let info = eps[e] { item.files[i].episodeTitle = info.name; item.files[i].still = info.still }
+                    }
+                }
+            }
+            guard let j = items.firstIndex(where: { $0.id == id }) else { continue }
+            items[j] = item
+            if done % 10 == 0 { save() }
+        }
+        save()
     }
 }
