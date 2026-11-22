@@ -65,6 +65,7 @@ struct DetailView: View {
     @ObservedObject private var marks = ItemMarks.shared
     @StateObject private var tone = PosterTone()
     @State private var season: Int?
+    @State private var pickedEp: String?
     @State private var details: TMDBDetails?
     @State private var expanded = false
     @State private var showAllEpisodes = false
@@ -311,11 +312,22 @@ struct DetailView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(item.episodes(season: s)) { ep in
-                        Button { play(ep, item) } label: {
+                        Button {
+                            // first tap picks the episode (文件位置 shows it), second tap plays
+                            if pickedEp == ep.id { play(ep, item) } else { withAnimation(.easeInOut(duration: 0.15)) { pickedEp = ep.id } }
+                        } label: {
                             VStack(alignment: .leading, spacing: 8) {
                                 PosterImage(url: ep.still ?? item.backdrop, title: "")
                                     .frame(width: 232, height: 130)
                                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .overlay {
+                                        if pickedEp == ep.id {
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white, lineWidth: 3)
+                                                Image(systemName: "play.circle.fill").font(.system(size: 44)).shadow(radius: 6)
+                                            }
+                                        }
+                                    }
                                     .overlay(alignment: .bottomLeading) {
                                         if marks.watched.contains(ep.id) {
                                             Image(systemName: "checkmark.circle.fill").padding(8)
@@ -375,7 +387,12 @@ struct DetailView: View {
     private func locGroups(_ item: LibraryItem) -> [LocGroup] {
         var order: [String] = []
         var map: [String: (String, String, [LibraryFile])] = [:]
-        for f in item.files {
+        var files = item.files
+        if item.isTV {
+            let one = item.files.first { $0.id == pickedEp } ?? firstPlayable(item)
+            files = one.map { [$0] } ?? []
+        }
+        for f in files {
             let src = sources.source(f.sourceId)
             let drive = src.map { $0.name == $0.kind.title || $0.name.isEmpty ? $0.kind.title : "\($0.kind.title) · \($0.name)" } ?? "未知来源"
             var path = f.file.meta["dirPath"] ?? ""
@@ -396,7 +413,13 @@ struct DetailView: View {
         let groups = locGroups(item)
         if !groups.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("文件位置").font(.title2.bold()).padding(.horizontal, 20)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("文件位置").font(.title2.bold())
+                    if item.isTV, let f = groups.first?.files.first {
+                        Text(epTitle(f)).font(.subheadline).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 20)
                 ForEach(groups) { g in
                     VStack(alignment: .leading, spacing: 8) {
                         Label(g.drive, systemImage: "externaldrive.connected.to.line.below").font(.subheadline.weight(.semibold))
