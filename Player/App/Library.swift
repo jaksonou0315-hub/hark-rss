@@ -336,7 +336,10 @@ final class LibraryStore: ObservableObject {
                 p = NameParser.parse(f.file.name, parents: f.parents)
             }
             let key = (p.isEpisode ? "tv:" : "movie:") + p.title.lowercased() + (p.isEpisode ? "" : ":\(p.year ?? 0)")
-            let lf = LibraryFile(id: f.source.id.uuidString + ":" + f.file.id, sourceId: f.source.id, file: f.file,
+            var ff = f.file
+            let rootName = f.folder.dir.name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            ff.meta["dirPath"] = "/" + ([rootName.isEmpty ? f.folder.title : rootName] + f.parents.reversed()).filter { !$0.isEmpty }.joined(separator: "/")
+            let lf = LibraryFile(id: f.source.id.uuidString + ":" + f.file.id, sourceId: f.source.id, file: ff,
                                  season: p.season, episode: p.episode, subtitles: f.subs)
             if groups[key] == nil { groups[key] = ScanGroup(parsed: p, files: [], serverPoster: f.file.posterURL, serverOverview: f.file.overview); order.append(key) }
             groups[key]?.files.append(lf)

@@ -74,6 +74,12 @@ enum Groupings {
     static func categoryOverride(_ id: String) -> Category? {
         ((UserDefaults.standard.dictionary(forKey: catKey) as? [String: String])?[id]).flatMap(Category.init(rawValue:))
     }
+    @MainActor static func setCategory(_ ids: [String], _ c: Category?) {
+        var d = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
+        for id in ids { d[id] = c?.rawValue }
+        UserDefaults.standard.set(d, forKey: catKey)
+        NotificationCenter.default.post(name: .categoryChanged, object: nil)
+    }
     @MainActor static func setCategory(_ id: String, _ c: Category?) {
         var d = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
         d[id] = c?.rawValue
@@ -752,6 +758,9 @@ struct ItemGridView: View {
     let ids: [String]
     @EnvironmentObject var library: LibraryStore
     @State private var sort = 0
+    @State private var selecting = false
+    @State private var selected = Set<String>()
+    @State private var toast: String?
 
     private var items: [LibraryItem] {
         let byId = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -765,31 +774,98 @@ struct ItemGridView: View {
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             HomeStyle.bg.ignoresSafeArea()
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                     ForEach(items) { it in
-                        NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain).categoryMenu(it)
+                        if selecting {
+                            Button { toggle(it.id) } label: {
+                                PosterTile(item: it, width: 104)
+                                    .opacity(selected.contains(it.id) ? 1 : 0.55)
+                                    .overlay(alignment: .topTrailing) {
+                                        Image(systemName: selected.contains(it.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.title2).symbolRenderingMode(.palette)
+                                            .foregroundStyle(.white, selected.contains(it.id) ? Color.pink : Color.black.opacity(0.35))
+                                            .padding(6)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain)
+                                .contextMenu {
+                                    Button { selecting = true; selected = [it.id] } label: { Label("多选", systemImage: "checkmark.circle") }
+                                    CategoryMenuItems(item: it, flat: true)
+                                }
+                        }
                     }
                 }
                 .padding(16)
-                .padding(.bottom, 100)
+                .padding(.bottom, 120)
+            }
+            if selecting { selectionBar }
+            if let t = toast {
+                Text(t).font(.footnote.weight(.semibold)).padding(.horizontal, 16).frame(height: 40)
+                    .glass(in: Capsule()).padding(.bottom, selecting ? 100 : 40)
+                    .task(id: t) { try? await Task.sleep(nanoseconds: 1_800_000_000); withAnimation { toast = nil } }
             }
         }
-        .navigationTitle(title)
+        .navigationTitle(selecting ? "已选 \(selected.count) 部" : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("排序", selection: $sort) {
-                        Text("默认").tag(0); Text("名称").tag(1); Text("评分").tag(2); Text("年份").tag(3)
+            if selecting {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(selected.count == items.count ? "全不选" : "全选") {
+                        selected = selected.count == items.count ? [] : Set(items.map(\.id))
                     }
-                } label: { Image(systemName: "arrow.up.arrow.down") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { selecting = false; selected = [] }.bold()
+                }
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("选择") { selecting = true; selected = [] }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("排序", selection: $sort) {
+                            Text("默认").tag(0); Text("名称").tag(1); Text("评分").tag(2); Text("年份").tag(3)
+                        }
+                    } label: { Image(systemName: "arrow.up.arrow.down") }
+                }
             }
         }
+        .navigationBarBackButtonHidden(selecting)
         .foregroundStyle(.white)
+    }
+
+    private func toggle(_ id: String) {
+        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+    }
+
+    private var selectionBar: some View {
+        Menu {
+            ForEach(Groupings.Category.allCases, id: \.self) { c in
+                Button(c.name) { move(to: c) }
+            }
+            Divider()
+            Button { move(to: nil) } label: { Label("恢复自动分类", systemImage: "arrow.uturn.backward") }
+        } label: {
+            Label(selected.isEmpty ? "先选择影片" : "移到分类（\(selected.count) 部）", systemImage: "folder.badge.gearshape")
+                .font(.headline).frame(maxWidth: .infinity).frame(height: 54)
+        }
+        .disabled(selected.isEmpty)
+        .glass(in: Capsule(), interactive: true)
+        .padding(.horizontal, 24).padding(.bottom, 30)
+    }
+
+    private func move(to c: Groupings.Category?) {
+        let ids = Array(selected)
+        Groupings.setCategory(ids, c)
+        toast = c.map { "已把 \(ids.count) 部移到「\($0.name)」" } ?? "已恢复 \(ids.count) 部的自动分类"
+        selected = []
+        selecting = false
     }
 }
 

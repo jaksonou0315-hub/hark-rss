@@ -91,6 +91,7 @@ struct DetailView: View {
                                 cast
                                 genres
                                 recent(item)
+                                locations(item)
                             }
                             .padding(.top, 18)
                             .padding(.bottom, 50)
@@ -360,6 +361,68 @@ struct DetailView: View {
                     }
                 }
                 .padding(.horizontal, 20)
+            }
+        }
+    }
+
+    // MARK: file locations
+
+    private struct LocGroup: Identifiable { let id: String; let drive: String; let path: String; let files: [LibraryFile] }
+
+    private func locGroups(_ item: LibraryItem) -> [LocGroup] {
+        var order: [String] = []
+        var map: [String: (String, String, [LibraryFile])] = [:]
+        for f in item.files {
+            let src = sources.source(f.sourceId)
+            let drive = src.map { $0.name == $0.kind.title || $0.name.isEmpty ? $0.kind.title : "\($0.kind.title) · \($0.name)" } ?? "未知来源"
+            var path = f.file.meta["dirPath"] ?? ""
+            if path.isEmpty {
+                let folder = library.folders.first { $0.id.uuidString == f.file.meta["folder"] }
+                if src?.kind == .local || src?.kind == .smb || src?.kind == .webdav {
+                    path = (f.file.path as NSString).deletingLastPathComponent
+                } else if let folder { path = "/" + folder.title + "/…" }
+            }
+            let key = f.sourceId.uuidString + "|" + path
+            if map[key] == nil { map[key] = (drive, path, []); order.append(key) }
+            map[key]!.2.append(f)
+        }
+        return order.map { LocGroup(id: $0, drive: map[$0]!.0, path: map[$0]!.1, files: map[$0]!.2) }
+    }
+
+    @ViewBuilder private func locations(_ item: LibraryItem) -> some View {
+        let groups = locGroups(item)
+        if !groups.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("文件位置").font(.title2.bold()).padding(.horizontal, 20)
+                ForEach(groups) { g in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(g.drive, systemImage: "externaldrive.connected.to.line.below").font(.subheadline.weight(.semibold))
+                        if !g.path.isEmpty {
+                            Text(g.path).font(.footnote.monospaced()).foregroundStyle(.white.opacity(0.85)).textSelection(.enabled)
+                        }
+                        let shown = g.files.sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
+                        ForEach(shown.prefix(8)) { f in
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "film").font(.caption2).padding(.top, 2)
+                                Text(f.file.name).font(.caption).lineLimit(3).textSelection(.enabled)
+                                Spacer(minLength: 4)
+                                Text(f.file.sizeText).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.55))
+                            }
+                            .foregroundStyle(.white.opacity(0.75))
+                        }
+                        if shown.count > 8 {
+                            Text("…等共 \(shown.count) 个文件").font(.caption2).foregroundStyle(.white.opacity(0.55))
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .contextMenu {
+                        Button { UIPasteboard.general.string = g.drive + "\n" + g.path } label: { Label("复制路径", systemImage: "doc.on.doc") }
+                        Button { UIPasteboard.general.string = g.files.map(\.file.name).joined(separator: "\n") } label: { Label("复制文件名", systemImage: "doc.on.doc") }
+                    }
+                    .padding(.horizontal, 20)
+                }
             }
         }
     }
