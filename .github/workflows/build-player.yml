@@ -34,8 +34,10 @@ jobs:
       - name: Find MPVKit static libs to force-load
         run: |
           FL=""
-          for N in Libavcodec Libavformat Libavutil Libavfilter Libavdevice Libswresample Libswscale Libass Libfreetype; do
-            A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
+          for N in Libavcodec Libavformat Libavutil Libavfilter Libswresample Libswscale Libass Libfreetype; do
+            A=$(find build/SourcePackages/artifacts -path "*/$N/$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
+            [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
+            find build/SourcePackages/artifacts -path "*$N*.xcframework/ios-arm64/*" -name "$N" -type f
             [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64*/*" -name "$N*" -type f ! -name "*.plist" ! -name "*.h" | grep -v simulator | head -1)
             echo "$N -> $A"; file "$A" || true
             [ -n "$A" ] && FL="$FL -Wl,-force_load,$PWD/$A"
@@ -52,7 +54,9 @@ jobs:
           test -f build/Build/Products/Release-iphoneos/HarkPlayer.app/HarkPlayer
       - name: Show errors
         if: failure()
-        run: grep -n "error:" build.log | sort -u | head -80 || true
+        run: |
+          grep -n "error:" build.log | sort -u | head -80 || true
+          grep -nE "duplicate symbol|Undefined symbols|referenced from|ld: |_[a-z_]+, referenced|^  \"_" build.log | sort -u | head -120 || true
       - name: Package IPA
         run: |
           mkdir -p Payload
