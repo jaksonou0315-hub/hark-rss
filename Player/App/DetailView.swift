@@ -324,6 +324,8 @@ struct DetailView: View {
                                 Text(epTitle(ep)).font(.subheadline.weight(.medium)).lineLimit(1)
                                     .frame(width: 232, alignment: .leading)
                             }
+                            .frame(width: 232)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -356,6 +358,7 @@ struct DetailView: View {
                             }
                             .padding(12).frame(width: 220, alignment: .leading)
                             .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -661,7 +664,10 @@ struct AllEpisodesSheet: View {
                     .pickerStyle(.segmented)
                 }
                 ForEach(item.episodes(season: season ?? item.seasons.first)) { ep in
-                    Button { dismiss(); play(ep) } label: {
+                    Button {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { play(ep) }   // let the sheet finish closing first
+                    } label: {
                         HStack(spacing: 12) {
                             PosterImage(url: ep.still ?? item.backdrop, title: "")
                                 .frame(width: 128, height: 72)
@@ -670,7 +676,9 @@ struct AllEpisodesSheet: View {
                                 Text(ep.episode.map { "第 \($0) 集" } ?? "未知集数").font(.subheadline.bold())
                                 Text(ep.episodeTitle ?? ep.file.name).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
+                            Spacer(minLength: 0)
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
