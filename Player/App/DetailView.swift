@@ -66,6 +66,7 @@ struct DetailView: View {
     @StateObject private var tone = PosterTone()
     @State private var season: Int?
     @State private var pickedEp: String?
+    @State private var epOverview: [String: String] = [:]
     @State private var details: TMDBDetails?
     @State private var expanded = false
     @State private var showAllEpisodes = false
@@ -88,7 +89,8 @@ struct DetailView: View {
                             VStack(alignment: .leading, spacing: 26) {
                                 actionRow(item)
                                 overview(item)
-                                if item.isTV { episodes(item) } else if item.files.count > 1 { versions(item) }
+                                if item.isTV { episodes(item)
+                                    episodeInfo(item) } else if item.files.count > 1 { versions(item) }
                                 cast
                                 genres
                                 recent(item)
@@ -314,7 +316,8 @@ struct DetailView: View {
                     ForEach(item.episodes(season: s)) { ep in
                         Button {
                             // first tap picks the episode (文件位置 shows it), second tap plays
-                            if pickedEp == ep.id { play(ep, item) } else { withAnimation(.easeInOut(duration: 0.15)) { pickedEp = ep.id } }
+                            // tap shows this episode's info + file location; play from the info card or the top button
+                            withAnimation(.easeInOut(duration: 0.15)) { pickedEp = ep.id }
                         } label: {
                             VStack(alignment: .leading, spacing: 8) {
                                 PosterImage(url: ep.still ?? item.backdrop, title: "")
@@ -324,7 +327,6 @@ struct DetailView: View {
                                         if pickedEp == ep.id {
                                             ZStack {
                                                 RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white, lineWidth: 3)
-                                                Image(systemName: "play.circle.fill").font(.system(size: 44)).shadow(radius: 6)
                                             }
                                         }
                                     }
@@ -346,6 +348,48 @@ struct DetailView: View {
                     }
                 }
                 .padding(.horizontal, 20)
+            }
+        }
+    }
+
+    @ViewBuilder private func episodeInfo(_ item: LibraryItem) -> some View {
+        if let p = pickedEp, let ep = item.files.first(where: { $0.id == p }) {
+            let g = locGroups(item).first
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("第\(ep.season ?? 1)季 · " + epTitle(ep)).font(.headline).lineLimit(2)
+                    Spacer()
+                    Button { withAnimation { pickedEp = nil } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.5)) }
+                        .buttonStyle(.plain)
+                }
+                if let o = epOverview[ep.id], !o.isEmpty {
+                    Text(o).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                }
+                if let g {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(g.drive, systemImage: "externaldrive.connected.to.line.below").font(.caption.weight(.semibold))
+                        if !g.path.isEmpty { Text(g.path).font(.caption.monospaced()).foregroundStyle(.white.opacity(0.8)).textSelection(.enabled) }
+                        Text(ep.file.name + (ep.file.sizeText.isEmpty ? "" : " · " + ep.file.sizeText))
+                            .font(.caption).foregroundStyle(.white.opacity(0.65)).textSelection(.enabled)
+                    }
+                    .contextMenu {
+                        Button { UIPasteboard.general.string = g.drive + "\n" + g.path + "/" + ep.file.name } label: { Label("复制路径", systemImage: "doc.on.doc") }
+                    }
+                }
+                Button { play(ep, item) } label: {
+                    Label(resumeLabel(item, ep), systemImage: "play.fill").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.black).frame(maxWidth: .infinity).frame(height: 44)
+                        .background(.white.opacity(0.92), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 20)
+            .task(id: ep.id) {
+                guard epOverview[ep.id] == nil, let tv = item.tmdbId, let s = ep.season, let e = ep.episode else { return }
+                let eps = await TMDB.season(tvId: tv, season: s)
+                epOverview[ep.id] = eps[e]?.overview ?? ""
             }
         }
     }
@@ -653,6 +697,7 @@ struct DetailView: View {
 
     private func firstPlayable(_ item: LibraryItem) -> LibraryFile? {
         if item.isTV {
+            if let p = pickedEp, let f = item.files.first(where: { $0.id == p }) { return f }
             let eps = item.episodes(season: season ?? item.seasons.first)
             return eps.first { !marks.watched.contains($0.id) } ?? eps.first
         }
