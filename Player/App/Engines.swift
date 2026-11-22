@@ -44,6 +44,30 @@ enum EngineKind: String, CaseIterable { case auto, mpv, vlc
     }
 }
 
+/// Synchronous on-disk log of the last mpv session (survives a hard crash).
+enum MPVLog {
+    static let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    static let file = dir.appendingPathComponent("mpv-hark.log")
+    static let mpvFile = dir.appendingPathComponent("mpv-core.log")
+    private static let lock = NSLock()
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        try? Data().write(to: file); try? FileManager.default.removeItem(at: mpvFile)
+    }
+    static func write(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let h = try? FileHandle(forWritingTo: file) else {
+            try? (line + "\n").data(using: .utf8)?.write(to: file); return
+        }
+        h.seekToEndOfFile(); h.write((line + "\n").data(using: .utf8)!); try? h.synchronize(); try? h.close()
+    }
+    static func combined() -> String {
+        let a = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        let b = (try? String(contentsOf: mpvFile, encoding: .utf8)) ?? ""
+        return a + "\n===== mpv log-file =====\n" + b
+    }
+}
+
 /// Breadcrumb so a hard crash inside libmpv is noticed on next launch; auto mode then falls back to VLC.
 enum MPVGuard {
     private static let d = UserDefaults.standard
@@ -231,15 +255,24 @@ final class MPVCore: @unchecked Sendable {
         ]
         if !s.subtitleEncoding.isEmpty { opts.append(("sub-codepage", s.subtitleEncoding)) }
         opts.append(("sub-fonts-dir", SubtitleStyle.fontsDir.path))
-        for (k, v) in opts { mpv_set_option_string(m, k, v) }
-        mpv_request_log_messages(m, "no")
-        MPVGuard.mark("initialize")
-        mpv_initialize(m)
-        MPVGuard.mark("ready")
+        MPVLog.reset()
+        MPVLog.write("iOS \(UIDevice.current.systemVersion), EDR headroom \(UIScreen.main.potentialEDRHeadroom)")
+        for (k, v) in opts {
+            let r = mpv_set_option_string(m, k, v)
+            MPVLog.write("opt \(k)=\(v) -> \(r)")
+        }
+        mpv_set_option_string(m, "log-file", MPVLog.mpvFile.path)
+        mpv_set_option_string(m, "msg-level", "all=debug")
+        mpv_request_log_messages(m, "debug")
         mpv_set_wakeup_callback(m, { ctx in
             guard let ctx else { return }
             Unmanaged<MPVCore>.fromOpaque(ctx).takeUnretainedValue().drain()
         }, Unmanaged.passUnretained(self).toOpaque())
+        MPVGuard.mark("initialize")
+        MPVLog.write("mpv_initialize…")
+        let r = mpv_initialize(m)
+        MPVLog.write("mpv_initialize -> \(r)")
+        MPVGuard.mark("ready")
     }
 
     private func drain() {
@@ -250,6 +283,13 @@ final class MPVCore: @unchecked Sendable {
                 let id = ev.pointee.event_id
                 if id == MPV_EVENT_NONE { break }
                 switch id {
+                case MPV_EVENT_LOG_MESSAGE:
+                    if let lm = ev.pointee.data?.assumingMemoryBound(to: mpv_event_log_message.self).pointee {
+                        let pre = lm.prefix.map { String(cString: $0) } ?? ""
+                        let lv = lm.level.map { String(cString: $0) } ?? ""
+                        let tx = lm.text.map { String(cString: $0) } ?? ""
+                        MPVLog.write("[\(pre)] \(lv): \(tx.trimmingCharacters(in: .newlines))")
+                    }
                 case MPV_EVENT_FILE_LOADED:
                     MPVGuard.mark("loaded")
                     self.lock.lock(); self._loaded = true; self._ended = false; self._error = nil; self.lock.unlock()

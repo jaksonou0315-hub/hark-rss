@@ -80,6 +80,9 @@ struct SettingsView: View {
                     Picker("MKV 等格式播放内核", selection: $settings.mkvEngine) {
                         ForEach(EngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
+                    if FileManager.default.fileExists(atPath: MPVLog.file.path) {
+                        ShareLink(item: MPVLog.combined()) { Label("导出 MPV 日志", systemImage: "square.and.arrow.up") }
+                    }
                     if mpvCrashed {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("MPV 上次在「\(MPVGuard.crashStep ?? "未知")」阶段闪退，自动模式已改用 VLC。").font(.footnote).foregroundStyle(.orange)
