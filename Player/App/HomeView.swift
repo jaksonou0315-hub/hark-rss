@@ -35,6 +35,7 @@ struct Bucket: Identifiable, Hashable {
 enum ShelfRoute: Hashable {
     case items(String, [String])          // title, item ids
     case buckets(String, [Bucket])
+    case bl
 }
 
 struct ContinueEntry: Identifiable {
@@ -86,8 +87,43 @@ enum Groupings {
         UserDefaults.standard.set(d, forKey: catKey)
         NotificationCenter.default.post(name: .categoryChanged, object: nil)
     }
-    static func autoCategory(_ i: LibraryItem) -> Category {
-        if autoBL(i) { return .bl }
+    /// BL 子分类：电影 / 电视剧 / 短剧 / 动画 / 综艺
+    enum BLSub: String, CaseIterable {
+        case movie, tv, short, anime, variety
+        var name: String {
+            switch self { case .movie: "电影"; case .tv: "电视剧"; case .short: "短剧"; case .anime: "动画"; case .variety: "综艺" }
+        }
+    }
+    private static let blSubKey = "lib.blsub"
+    static func blSubOverride(_ id: String) -> BLSub? {
+        ((UserDefaults.standard.dictionary(forKey: blSubKey) as? [String: String])?[id]).flatMap(BLSub.init(rawValue:))
+    }
+    static func autoBLSub(_ i: LibraryItem) -> BLSub {
+        switch autoCategory(i, ignoreBL: true) {
+        case .shortDrama: return .short
+        case .anime, .animeMovie: return .anime
+        case .variety: return .variety
+        case .tv: return .tv
+        case .doc: return i.isTV ? .tv : .movie
+        default: return i.isTV ? .tv : .movie
+        }
+    }
+    static func blSub(_ i: LibraryItem) -> BLSub { blSubOverride(i.id) ?? autoBLSub(i) }
+    @MainActor static func setBLSub(_ ids: [String], _ c: BLSub?) {
+        var d = (UserDefaults.standard.dictionary(forKey: blSubKey) as? [String: String]) ?? [:]
+        for id in ids { d[id] = c?.rawValue }
+        UserDefaults.standard.set(d, forKey: blSubKey)
+        // moving into a BL sub-category also puts the item in BL
+        if c != nil {
+            var cd = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
+            for id in ids { cd[id] = Category.bl.rawValue }
+            UserDefaults.standard.set(cd, forKey: catKey)
+        }
+        NotificationCenter.default.post(name: .categoryChanged, object: nil)
+    }
+
+    static func autoCategory(_ i: LibraryItem, ignoreBL: Bool = false) -> Category {
+        if !ignoreBL && autoBL(i) { return .bl }
         if matches(i, concertRegex) || (i.keywords ?? []).contains(where: { concertKeywords.contains($0) }) { return .concert }
         if matches(i, shortRegex) || (i.keywords ?? []).contains(where: { k in shortKeywords.contains(k) || (k.hasPrefix("net:") && shortPlatforms.contains { k.contains($0) }) }) { return .shortDrama }
         if i.tmdbId == nil { return .other }
@@ -291,7 +327,7 @@ struct HomeView: View {
                             shelfRow("综艺", shelves.variety)
                             shelfRow("纪录片", shelves.docs)
                             shelfRow("演唱会", shelves.concerts)
-                            shelfRow("BL", shelves.bl)
+                            shelfRow("BL", shelves.bl, route: .bl)
                             shelfRow("其他", shelves.other)
                             bucketRow("类型", shelves.genres)
                             stats
@@ -322,6 +358,7 @@ struct HomeView: View {
                 switch r {
                 case .items(let t, let ids): ItemGridView(title: t, ids: ids)
                 case .buckets(let t, let b): BucketListView(title: t, buckets: b)
+                case .bl: ItemGridView(title: "BL", ids: [], bl: true)
                 }
             }
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
@@ -414,10 +451,10 @@ struct HomeView: View {
         }
     }
 
-    @ViewBuilder private func shelfRow(_ title: String, _ items: [LibraryItem]) -> some View {
+    @ViewBuilder private func shelfRow(_ title: String, _ items: [LibraryItem], route: ShelfRoute? = nil) -> some View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                header(title, count: items.count, route: .items(title, items.map(\.id)))
+                header(title, count: items.count, route: route ?? .items(title, items.map(\.id)))
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 12) {
                         ForEach(items.prefix(30)) { it in
@@ -646,9 +683,26 @@ struct CategoryMenuItems: View {
     }
 }
 
+struct BLSubMenuItems: View {
+    let item: LibraryItem
+    var body: some View {
+        let cur = Groupings.blSub(item)
+        Section("BL 子分类（当前：\(cur.name)）") {
+            ForEach(Groupings.BLSub.allCases, id: \.self) { c in
+                Button { Groupings.setBLSub([item.id], c) } label: {
+                    if c == cur { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
+                }
+            }
+        }
+    }
+}
+
 extension View {
     func categoryMenu(_ item: LibraryItem) -> some View {
-        contextMenu { CategoryMenuItems(item: item, flat: true) }
+        contextMenu {
+            if Groupings.isBL(item) { BLSubMenuItems(item: item) }
+            CategoryMenuItems(item: item, flat: true)
+        }
     }
 }
 
@@ -756,15 +810,25 @@ struct BucketCard: View {
 struct ItemGridView: View {
     let title: String
     let ids: [String]
+    var bl = false
     @EnvironmentObject var library: LibraryStore
     @State private var sort = 0
+    @State private var blTab: Groupings.BLSub? = nil
+    @State private var tick = 0
     @State private var selecting = false
     @State private var selected = Set<String>()
     @State private var toast: String?
 
     private var items: [LibraryItem] {
-        let byId = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let xs = ids.compactMap { byId[$0] }
+        let _ = tick
+        let xs: [LibraryItem]
+        if bl {
+            let all = library.items.filter(Groupings.isBL).sorted { $0.added > $1.added }
+            xs = blTab.map { t in all.filter { Groupings.blSub($0) == t } } ?? all
+        } else {
+            let byId = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            xs = ids.compactMap { byId[$0] }
+        }
         switch sort {
         case 1: return xs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case 2: return xs.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
@@ -777,6 +841,7 @@ struct ItemGridView: View {
         ZStack(alignment: .bottom) {
             HomeStyle.bg.ignoresSafeArea()
             ScrollView {
+                if bl { blTabs }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                     ForEach(items) { it in
                         if selecting {
@@ -795,6 +860,7 @@ struct ItemGridView: View {
                             NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain)
                                 .contextMenu {
                                     Button { selecting = true; selected = [it.id] } label: { Label("多选", systemImage: "checkmark.circle") }
+                                    if bl { BLSubMenuItems(item: it) }
                                     CategoryMenuItems(item: it, flat: true)
                                 }
                         }
@@ -838,6 +904,27 @@ struct ItemGridView: View {
         }
         .navigationBarBackButtonHidden(selecting)
         .foregroundStyle(.white)
+        .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
+    }
+
+    private var blTabs: some View {
+        let all = library.items.filter(Groupings.isBL)
+        let counts = Dictionary(grouping: all, by: Groupings.blSub).mapValues(\.count)
+        let tabs: [(Groupings.BLSub?, String, Int)] = [(nil, "全部", all.count)] + Groupings.BLSub.allCases.map { ($0, $0.name, counts[$0] ?? 0) }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tabs, id: \.1) { t in
+                    Button { withAnimation(.easeInOut(duration: 0.2)) { blTab = t.0; selected = [] } } label: {
+                        Text("\(t.1) \(t.2)").font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14).frame(height: 36)
+                            .foregroundStyle(blTab == t.0 ? Color.black : Color.white)
+                            .background(blTab == t.0 ? Color.white : HomeStyle.card, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 10)
+        }
     }
 
     private func toggle(_ id: String) {
@@ -846,6 +933,14 @@ struct ItemGridView: View {
 
     private var selectionBar: some View {
         Menu {
+            if bl {
+                Section("BL 子分类") {
+                    ForEach(Groupings.BLSub.allCases, id: \.self) { c in
+                        Button("BL · " + c.name) { moveSub(c) }
+                    }
+                    Button { moveSub(nil) } label: { Label("BL 子分类改回自动", systemImage: "arrow.uturn.backward") }
+                }
+            }
             ForEach(Groupings.Category.allCases, id: \.self) { c in
                 Button(c.name) { move(to: c) }
             }
@@ -858,6 +953,14 @@ struct ItemGridView: View {
         .disabled(selected.isEmpty)
         .glass(in: Capsule(), interactive: true)
         .padding(.horizontal, 24).padding(.bottom, 30)
+    }
+
+    private func moveSub(_ c: Groupings.BLSub?) {
+        let ids = Array(selected)
+        Groupings.setBLSub(ids, c)
+        toast = c.map { "已把 \(ids.count) 部移到「BL · \($0.name)」" } ?? "已恢复 \(ids.count) 部的自动子分类"
+        selected = []
+        selecting = false
     }
 
     private func move(to c: Groupings.Category?) {
@@ -940,6 +1043,7 @@ struct LibrarySearchView: View {
                 switch r {
                 case .items(let t, let ids): ItemGridView(title: t, ids: ids)
                 case .buckets(let t, let b): BucketListView(title: t, buckets: b)
+                case .bl: ItemGridView(title: "BL", ids: [], bl: true)
                 }
             }
         }
