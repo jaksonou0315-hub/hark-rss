@@ -17,8 +17,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.15.12"
-    CURRENT_PROJECT_VERSION: "40"
+    MARKETING_VERSION: "1.15.13"
+    CURRENT_PROJECT_VERSION: "41"
     CODE_SIGNING_ALLOWED: NO
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
@@ -39,6 +39,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ouyanghong.harkplayer
+        # MobileVLCKit exports its own FFmpeg 4.4 / libass / freetype; force MPVKit's static copies
+        # into the app so libmpv binds to FFmpeg 9 instead (set by CI as MPV_FORCE_LOAD).
+        OTHER_LDFLAGS: "$(inherited) $(MPV_FORCE_LOAD)"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: Support/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: "Hark 影音"

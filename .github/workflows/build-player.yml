@@ -31,13 +31,23 @@ jobs:
           key: spm-player-${{ hashFiles('Player/project.yml') }}
       - name: Resolve packages
         run: xcodebuild -resolvePackageDependencies -project HarkPlayer.xcodeproj -scheme HarkPlayer -clonedSourcePackagesDirPath build/SourcePackages
+      - name: Find MPVKit static libs to force-load
+        run: |
+          FL=""
+          for N in Libavcodec Libavformat Libavutil Libavfilter Libavdevice Libswresample Libswscale Libass Libfreetype; do
+            A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
+            [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64*/*" -name "$N*" -type f ! -name "*.plist" ! -name "*.h" | grep -v simulator | head -1)
+            echo "$N -> $A"; file "$A" || true
+            [ -n "$A" ] && FL="$FL -Wl,-force_load,$PWD/$A"
+          done
+          echo "MPV_FORCE_LOAD=$FL" >> $GITHUB_ENV
       - name: Build
         run: |
           set -o pipefail
           xcodebuild -project HarkPlayer.xcodeproj -scheme HarkPlayer -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             -clonedSourcePackagesDirPath build/SourcePackages \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee build.log | grep -E "error:|BUILD" || true
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" MPV_FORCE_LOAD="$MPV_FORCE_LOAD" build 2>&1 | tee build.log | grep -E "error:|BUILD" || true
           grep -q "BUILD SUCCEEDED" build.log
           test -f build/Build/Products/Release-iphoneos/HarkPlayer.app/HarkPlayer
       - name: Show errors
@@ -55,6 +65,7 @@ jobs:
             [ -e "Payload/HarkPlayer.app/Frameworks/$N" ] || { echo "embedding $N"; cp -R "$F" Payload/HarkPlayer.app/Frameworks/; }
           done
           echo "== Frameworks:"; ls Payload/HarkPlayer.app/Frameworks
+          echo "== ffmpeg binds to VLCKit (should be 0):"; xcrun dyld_info -fixups Payload/HarkPlayer.app/HarkPlayer 2>/dev/null | grep -E "MobileVLCKit.*_(avcodec|avformat|avutil|ass_)" | wc -l || true
           echo "== linked:"; otool -L Payload/HarkPlayer.app/HarkPlayer | grep rpath
           for L in $(otool -L Payload/HarkPlayer.app/HarkPlayer | awk '/@rpath/{print $1}'); do
             P="Payload/HarkPlayer.app/Frameworks/${L#@rpath/}"; [ -f "$P" ] || { echo "MISSING $L"; exit 1; }
