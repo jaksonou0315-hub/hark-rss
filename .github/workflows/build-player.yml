@@ -34,14 +34,14 @@ jobs:
       - name: Find MPVKit static libs to force-load
         run: |
           FL=""; OUT=$PWD/build/mpvforce; rm -rf $OUT; mkdir -p $OUT
-          for N in Libavcodec Libavformat Libavutil Libswresample Libswscale Libass Libfreetype; do
+          for N in Libavcodec Libavformat Libavutil Libswresample Libswscale Libass Libfreetype Libdav1d Libharfbuzz Libfribidi; do
             A=$(find build/SourcePackages/artifacts -path "*/$N/$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
             [ -z "$A" ] && { echo "no $N"; continue; }
             W=$OUT/$N; mkdir -p $W
             lipo "$A" -thin arm64 -output $W/thin.a 2>/dev/null || cp "$A" $W/thin.a
             # vulkan.o is compiled into avutil, avcodec and swscale; keep only avutil's copy
             if [ "$N" = Libavcodec ] || [ "$N" = Libswscale ]; then
-              (cd $W && ar x thin.a && rm -f vulkan.o thin.a && libtool -static -o ../$N.a *.o) && rm -rf $W
+              python3 ci/arx.py $W/thin.a $W/o vulkan.o && libtool -static -o $OUT/$N.a $W/o/*.o && rm -rf $W
             else
               mv $W/thin.a $OUT/$N.a && rm -rf $W
             fi
@@ -75,7 +75,7 @@ jobs:
             [ -e "Payload/HarkPlayer.app/Frameworks/$N" ] || { echo "embedding $N"; cp -R "$F" Payload/HarkPlayer.app/Frameworks/; }
           done
           echo "== Frameworks:"; ls Payload/HarkPlayer.app/Frameworks
-          echo "== ffmpeg binds to VLCKit (should be 0):"; xcrun dyld_info -fixups Payload/HarkPlayer.app/HarkPlayer 2>/dev/null | grep -E "MobileVLCKit.*_(avcodec|avformat|avutil|ass_)" | wc -l || true
+          echo "== ffmpeg binds to VLCKit (should be 0):"; xcrun dyld_info -fixups Payload/HarkPlayer.app/HarkPlayer 2>/dev/null | grep -E "MobileVLCKit.*_(av|ff_|sw|dav1d|hb_|fribidi|ass_|FT_)" || true
           echo "== linked:"; otool -L Payload/HarkPlayer.app/HarkPlayer | grep rpath
           for L in $(otool -L Payload/HarkPlayer.app/HarkPlayer | awk '/@rpath/{print $1}'); do
             P="Payload/HarkPlayer.app/Frameworks/${L#@rpath/}"; [ -f "$P" ] || { echo "MISSING $L"; exit 1; }
