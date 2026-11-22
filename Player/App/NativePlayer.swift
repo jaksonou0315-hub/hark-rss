@@ -132,15 +132,23 @@ final class NativePlayerModel: ObservableObject {
         }
     }
 
+    private var stopped = false
     func stop() {
+        // close() and onDisappear both call this; the second call came while SwiftUI was tearing the
+        // player view down, and AVPlayer threw from _removeAllLayersAndVideoTargets (闪退 on closing).
+        guard !stopped else { return }
+        stopped = true
         if let k = resumeKey, player.currentTime().seconds > 10 {
             let d = player.currentItem?.duration.seconds ?? 0
             if d.isFinite, d - player.currentTime().seconds < 5 { Resume.clear(k) } else { Resume.set(k, Int32(player.currentTime().seconds * 1000), total: Int32((d.isFinite ? d : 0) * 1000)) }
         }
         if let timeObs { player.removeTimeObserver(timeObs) }
         if let endObs { NotificationCenter.default.removeObserver(endObs) }
+        timeObs = nil; endObs = nil
         player.pause()
-        player.replaceCurrentItem(with: nil)
+        // detach the item after the view hierarchy is gone, never inside the teardown pass
+        let p = player
+        DispatchQueue.main.async { p.replaceCurrentItem(with: nil) }
     }
 
     static func meta(_ id: AVMetadataIdentifier, _ v: String) -> AVMetadataItem {
