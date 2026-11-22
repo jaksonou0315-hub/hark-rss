@@ -34,7 +34,7 @@ jobs:
       - name: Find MPVKit static libs to force-load
         run: |
           FL=""
-          for N in Libavcodec Libavformat Libavutil Libavfilter Libswresample Libswscale Libass Libfreetype; do
+          for N in Libavcodec Libavformat Libavutil Libswresample Libswscale Libass Libfreetype; do
             A=$(find build/SourcePackages/artifacts -path "*/$N/$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
             [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
             find build/SourcePackages/artifacts -path "*$N*.xcframework/ios-arm64/*" -name "$N" -type f
@@ -56,7 +56,7 @@ jobs:
         if: failure()
         run: |
           grep -n "error:" build.log | sort -u | head -80 || true
-          grep -nE "duplicate symbol|Undefined symbols|referenced from|ld: |_[a-z_]+, referenced|^  \"_" build.log | sort -u | head -120 || true
+          grep -E -A3 "duplicate symbol|Undefined symbols" build.log | head -60; grep "ld: " build.log | head || true
       - name: Package IPA
         run: |
           mkdir -p Payload
