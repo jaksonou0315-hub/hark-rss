@@ -95,6 +95,8 @@ final class NativePlayerModel: ObservableObject {
         let provider = SourceStore.shared.provider(for: request.source)
         do {
             let p = try await DownloadStore.shared.playable(provider, request.file)
+            // closed while the link was still loading: never start playback into a torn-down view
+            guard !stopped else { return }
             resumeKey = p.resumeKey
             var opts: [String: Any] = [:]
             if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }
@@ -111,6 +113,7 @@ final class NativePlayerModel: ObservableObject {
                 let ms = Resume.get(p.resumeKey)
                 if ms > 10_000 { await player.seek(to: CMTime(value: CMTimeValue(ms), timescale: 1000)) }
             }
+            guard !stopped else { player.pause(); return }
             player.play()
             timeObs = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main) { [weak self] t in
                 Task { @MainActor in
@@ -145,10 +148,10 @@ final class NativePlayerModel: ObservableObject {
         if let timeObs { player.removeTimeObserver(timeObs) }
         if let endObs { NotificationCenter.default.removeObserver(endObs) }
         timeObs = nil; endObs = nil
+        styleSub = nil
         player.pause()
-        // detach the item after the view hierarchy is gone, never inside the teardown pass
-        let p = player
-        DispatchQueue.main.async { p.replaceCurrentItem(with: nil) }
+        // no replaceCurrentItem(nil) here: during SwiftUI teardown AVPlayer throws from
+        // _removeAllLayersAndVideoTargets (闪退). The player and item are released with the model.
     }
 
     static func meta(_ id: AVMetadataIdentifier, _ v: String) -> AVMetadataItem {
@@ -167,7 +170,7 @@ struct AVPlayerVC: UIViewControllerRepresentable {
         let vc = AVPlayerViewController()
         vc.player = player
         vc.allowsPictureInPicturePlayback = true
-        vc.canStartPictureInPictureAutomaticallyFromInline = true
+        vc.canStartPictureInPictureAutomaticallyFromInline = false
         vc.delegate = context.coordinator
         // watch taps (without stealing them) so our close button shows/hides together with the system controls
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coord.tapped))
@@ -177,6 +180,10 @@ struct AVPlayerVC: UIViewControllerRepresentable {
         return vc
     }
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {}
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coord) {
+        vc.player?.pause()
+        vc.delegate = nil
+    }
     final class Coord: NSObject, AVPlayerViewControllerDelegate, UIGestureRecognizerDelegate {
         let done: () -> Void
         let tap: () -> Void
