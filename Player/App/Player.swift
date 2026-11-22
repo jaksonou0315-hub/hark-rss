@@ -121,6 +121,7 @@ final class PlayerController: NSObject, ObservableObject {
             if let k = playable?.resumeKey { Resume.clear(k) }
         }
         guard playing else { return }
+        if engine is MPVEngine, timeMs > 3000 { MPVGuard.clear() }
 
         if !pendingSubs.isEmpty {
             let subs = pendingSubs

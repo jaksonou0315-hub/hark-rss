@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var tmdbStatus: String?
     @State private var testing = false
+    @State private var mpvCrashed = MPVGuard.crashed
 
     var body: some View {
         NavigationStack {
@@ -78,6 +79,12 @@ struct SettingsView: View {
                     Toggle("杜比音轨兼容模式", isOn: $settings.dolbyStereo)
                     Picker("MKV 等格式播放内核", selection: $settings.mkvEngine) {
                         ForEach(EngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    if mpvCrashed {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("MPV 上次在「\(MPVGuard.crashStep ?? "未知")」阶段闪退，自动模式已改用 VLC。").font(.footnote).foregroundStyle(.orange)
+                            Button("重新启用 MPV") { MPVGuard.reset(); mpvCrashed = false }.font(.footnote)
+                        }
                     }
                 } header: { Text("播放") } footer: {
                     Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。兼容模式会把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。MKV 内核选「自动」时，文件名带杜比视界 / HDR / 4K / HEVC / Atmos / TrueHD 的用 MPV（能正确显示杜比视界色彩），其他用 VLC；SMB 在线播放始终用 VLC。")

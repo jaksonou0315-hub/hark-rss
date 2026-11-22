@@ -44,6 +44,22 @@ enum EngineKind: String, CaseIterable { case auto, mpv, vlc
     }
 }
 
+/// Breadcrumb so a hard crash inside libmpv is noticed on next launch; auto mode then falls back to VLC.
+enum MPVGuard {
+    private static let d = UserDefaults.standard
+    static func mark(_ step: String) { d.set(step, forKey: "mpv.step"); d.synchronize() }
+    static func clear() { d.removeObject(forKey: "mpv.step") }
+    /// Call once at launch.
+    static func checkLastRun() {
+        if let s = d.string(forKey: "mpv.step") {
+            d.set(s, forKey: "mpv.crashStep"); d.set(true, forKey: "mpv.crashed"); clear()
+        }
+    }
+    static var crashed: Bool { d.bool(forKey: "mpv.crashed") }
+    static var crashStep: String? { d.string(forKey: "mpv.crashStep") }
+    static func reset() { d.removeObject(forKey: "mpv.crashed"); d.removeObject(forKey: "mpv.crashStep") }
+}
+
 extension EngineChooser {
     /// mpv (libplacebo) maps Dolby Vision / HDR correctly; VLC stays for SMB streams (mpv build has no smb) and as fallback.
     static func useMPV(_ r: PlayRequest, local: Bool) -> Bool {
@@ -52,6 +68,7 @@ extension EngineChooser {
         case .vlc: return false
         case .mpv: return true
         case .auto:
+            if MPVGuard.crashed { return false }
             let n = r.file.name.lowercased()
             return DolbyBadges.nameHintsDV(r.file.name) || n.contains("hdr") || n.contains("2160p") || n.contains("4k")
                 || n.contains("uhd") || n.contains("hevc") || n.contains("x265") || n.contains("h265") || n.contains("h.265")
@@ -168,7 +185,7 @@ final class MPVMetalLayer: CAMetalLayer {
         get { super.wantsExtendedDynamicRangeContent }
         set {
             if Thread.isMainThread { super.wantsExtendedDynamicRangeContent = newValue }
-            else { DispatchQueue.main.sync { super.wantsExtendedDynamicRangeContent = newValue } }
+            else { DispatchQueue.main.async { super.wantsExtendedDynamicRangeContent = newValue } }
         }
     }
 }
@@ -193,7 +210,8 @@ final class MPVCore: @unchecked Sendable {
     var loaded: Bool { lock.lock(); defer { lock.unlock() }; return _loaded }
 
     init(layer: CAMetalLayer) {
-        guard let m = mpv_create() else { return }
+        MPVGuard.mark("create")
+        guard let m = mpv_create() else { MPVGuard.clear(); return }
         handle = m
         var l = layer
         mpv_set_option(m, "wid", MPV_FORMAT_INT64, &l)
@@ -215,7 +233,9 @@ final class MPVCore: @unchecked Sendable {
         opts.append(("sub-fonts-dir", SubtitleStyle.fontsDir.path))
         for (k, v) in opts { mpv_set_option_string(m, k, v) }
         mpv_request_log_messages(m, "no")
+        MPVGuard.mark("initialize")
         mpv_initialize(m)
+        MPVGuard.mark("ready")
         mpv_set_wakeup_callback(m, { ctx in
             guard let ctx else { return }
             Unmanaged<MPVCore>.fromOpaque(ctx).takeUnretainedValue().drain()
@@ -231,6 +251,7 @@ final class MPVCore: @unchecked Sendable {
                 if id == MPV_EVENT_NONE { break }
                 switch id {
                 case MPV_EVENT_FILE_LOADED:
+                    MPVGuard.mark("loaded")
                     self.lock.lock(); self._loaded = true; self._ended = false; self._error = nil; self.lock.unlock()
                 case MPV_EVENT_END_FILE:
                     if let d = ev.pointee.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee {
@@ -295,7 +316,8 @@ final class MPVCore: @unchecked Sendable {
         guard let h = handle else { return }
         handle = nil
         mpv_set_wakeup_callback(h, nil, nil)
-        DispatchQueue.global(qos: .utility).async { mpv_terminate_destroy(h) }
+        MPVGuard.mark("terminate")
+        DispatchQueue.global(qos: .utility).async { mpv_terminate_destroy(h); MPVGuard.clear() }
     }
 }
 
@@ -324,6 +346,7 @@ final class MPVEngine: MediaEngine {
             else { hdrs.append("\(k): \(v)") }
         }
         for h in hdrs { core.command(["change-list", "http-header-fields", "append", h]) }
+        MPVGuard.mark("loadfile")
         core.command(["loadfile", p.url.isFileURL ? p.url.path : p.url.absoluteString, "replace"])
         core.setFlag("pause", false)
         opened = true

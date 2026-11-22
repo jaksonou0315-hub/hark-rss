@@ -10,6 +10,7 @@ struct HarkPlayerApp: App {
     init() {
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 800 << 20)
         _ = AppActivity.shared
+        MPVGuard.checkLastRun()
     }
 
     var body: some Scene {
