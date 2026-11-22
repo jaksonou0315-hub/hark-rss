@@ -454,7 +454,14 @@ final class ScanCenter: ObservableObject {
                 }
                 let rootKey = f.dir.meta["root"] == "1" ? "__root__" : f.dir.id
                 if db(sid)[rootKey] == nil { out.failedFolders.insert(f.id.uuidString) }
-                assemble(src, f, rootKey: rootKey, rootParents: f.dir.meta["root"] == "1" ? [] : [f.dir.name], into: &out.found)
+                let dirs = db(sid).dirs, lang = AppSettings.shared.preferredSubLang
+                let parents = f.dir.meta["root"] == "1" ? [] : [f.dir.name]
+                let part = await Task.detached(priority: .userInitiated) { () -> [ScanFound] in
+                    var r: [ScanFound] = []
+                    Self.assemble(src, f, dirs, lang: lang, rootKey: rootKey, rootParents: parents, into: &r)
+                    return r
+                }.value
+                out.found += part
             }
         }
         await refreshStats()
