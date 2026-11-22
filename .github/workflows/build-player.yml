@@ -33,14 +33,20 @@ jobs:
         run: xcodebuild -resolvePackageDependencies -project HarkPlayer.xcodeproj -scheme HarkPlayer -clonedSourcePackagesDirPath build/SourcePackages
       - name: Find MPVKit static libs to force-load
         run: |
-          FL=""
+          FL=""; OUT=$PWD/build/mpvforce; rm -rf $OUT; mkdir -p $OUT
           for N in Libavcodec Libavformat Libavutil Libswresample Libswscale Libass Libfreetype; do
             A=$(find build/SourcePackages/artifacts -path "*/$N/$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
-            [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64/$N.framework/$N" -type f | head -1)
-            find build/SourcePackages/artifacts -path "*$N*.xcframework/ios-arm64/*" -name "$N" -type f
-            [ -z "$A" ] && A=$(find build/SourcePackages/artifacts -path "*$N.xcframework/ios-arm64*/*" -name "$N*" -type f ! -name "*.plist" ! -name "*.h" | grep -v simulator | head -1)
-            echo "$N -> $A"; file "$A" || true
-            [ -n "$A" ] && FL="$FL -Wl,-force_load,$PWD/$A"
+            [ -z "$A" ] && { echo "no $N"; continue; }
+            W=$OUT/$N; mkdir -p $W
+            lipo "$A" -thin arm64 -output $W/thin.a 2>/dev/null || cp "$A" $W/thin.a
+            # vulkan.o is compiled into avutil, avcodec and swscale; keep only avutil's copy
+            if [ "$N" = Libavcodec ] || [ "$N" = Libswscale ]; then
+              (cd $W && ar x thin.a && rm -f vulkan.o thin.a && libtool -static -o ../$N.a *.o) && rm -rf $W
+            else
+              mv $W/thin.a $OUT/$N.a && rm -rf $W
+            fi
+            echo "$N -> $OUT/$N.a"
+            FL="$FL -Wl,-force_load,$OUT/$N.a"
           done
           echo "MPV_FORCE_LOAD=$FL" >> $GITHUB_ENV
       - name: Build
