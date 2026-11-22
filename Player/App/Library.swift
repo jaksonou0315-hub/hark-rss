@@ -261,7 +261,7 @@ final class LibraryStore: ObservableObject {
                 let sig = self.scanFound &* 31 &+ self.foldersLeft
                 if sig == lastSig { continue }                      // nothing new was read
                 lastSig = sig
-                let f = ScanCenter.shared.snapshotFound(folderSnapshot)
+                let f = await ScanCenter.shared.snapshotFound(folderSnapshot)
                 let current = self.items + Array(self.staged.values)
                 // grouping + name parsing for thousands of files: off the main thread
                 let (built, _) = await Task.detached(priority: .utility) { Self.buildItems(f, current: current) }.value
@@ -470,7 +470,7 @@ final class LibraryStore: ObservableObject {
             let parents = db.dirs.values.filter { $0.children.contains { fileIds.contains($0.id) } }
             for snap in parents { _ = try? await ScanCenter.shared.browse(src, snap.dir) }
         }
-        let f = ScanCenter.shared.snapshotFound(folders)
+        let f = await ScanCenter.shared.snapshotFound(folders)
         let current = items
         let (built, _) = await Task.detached(priority: .userInitiated) { Self.buildItems(f, current: current) }.value
         let have = Set(built.map(\.id))

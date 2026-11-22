@@ -11,17 +11,42 @@ struct OnlineSubtitle: Identifiable, Hashable {
 enum SubtitleService {
     /// External subtitle files next to a video: same base name first; if the folder holds a single video, all subtitles.
     static func sidecars(for video: RemoteFile, in siblings: [RemoteFile]) -> [RemoteFile] {
-        let subs = siblings.filter { $0.isSubtitle && !["idx", "sub", "sup", "lrc"].contains($0.ext) }
-        let base = video.baseName.lowercased()
-        var matched = subs.filter { $0.baseName.lowercased().hasPrefix(base) }
-        if matched.isEmpty && siblings.filter({ $0.isVideo }).count == 1 { matched = subs }
-        // Chinese tracks first
-        return matched.sorted { score($0.name) > score($1.name) }
+        Sidecars(siblings, lang: AppSettings.shared.preferredSubLang).for(video)
     }
 
-    static func score(_ name: String) -> Int {
+    /// Built once per folder: the subtitle list, its lowercased names and the video count,
+    /// so matching N videos in a folder costs N × subs instead of N × all files (was quadratic every scan tick).
+    struct Sidecars {
+        private let subs: [(base: String, file: RemoteFile, score: Int)]
+        private let singleVideo: Bool
+        init(_ siblings: [RemoteFile], lang: String) {
+            var s: [(String, RemoteFile, Int)] = []
+            var videos = 0
+            for f in siblings {
+                if f.isDir { continue }
+                let e = f.ext
+                if FileKinds.subtitle.contains(e) {
+                    if !["idx", "sub", "sup", "lrc"].contains(e) {
+                        s.append((f.baseName.lowercased(), f, SubtitleService.score(f.name, lang: lang)))
+                    }
+                } else if f.isVideo { videos += 1 }
+            }
+            subs = s.sorted { $0.2 > $1.2 }      // Chinese tracks first
+            singleVideo = videos == 1
+        }
+        var isEmpty: Bool { subs.isEmpty }
+        func `for`(_ video: RemoteFile) -> [RemoteFile] {
+            if subs.isEmpty { return [] }
+            let base = video.baseName.lowercased()
+            let m = subs.filter { $0.base.hasPrefix(base) }.map(\.file)
+            return m.isEmpty && singleVideo ? subs.map(\.file) : m
+        }
+    }
+
+    static func score(_ name: String) -> Int { score(name, lang: AppSettings.shared.preferredSubLang) }
+
+    nonisolated static func score(_ name: String, lang pref: String) -> Int {
         let n = name.lowercased()
-        let pref = AppSettings.shared.preferredSubLang
         if pref == "zh" {
             if n.contains("chs") || n.contains("sc") || n.contains("简") || n.contains("zh-cn") || n.contains("zh-hans") || n.contains(".zh") { return 3 }
             if n.contains("cht") || n.contains("tc") || n.contains("繁") || n.contains("zh-tw") || n.contains("zh-hant") || n.contains("chi") { return 2 }

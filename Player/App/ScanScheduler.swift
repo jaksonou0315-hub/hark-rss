@@ -260,6 +260,13 @@ final class SnapshotDB {
         }
     }
 
+    private var lastFlush = Date.distantPast
+    func flushIfStale() {
+        guard Date().timeIntervalSince(lastFlush) > 20 else { return }
+        lastFlush = Date()
+        flush()
+    }
+
     func purge() {
         dirs = [:]; dirty = false
         try? FileManager.default.removeItem(at: url)
@@ -455,17 +462,29 @@ final class ScanCenter: ObservableObject {
     }
 
     /// What the snapshots hold right now (no network) — used to show videos while a crawl is still running.
-    func snapshotFound(_ folders: [LibraryFolder]) -> [ScanFound] {
-        var found: [ScanFound] = []
+    /// Walk the snapshot trees off the main thread (it used to run on main every 3 s while scanning: high CPU / 卡).
+    func snapshotFound(_ folders: [LibraryFolder]) async -> [ScanFound] {
+        var jobs: [(MediaSource, LibraryFolder, [String: DirSnap])] = []
+        var dbs: [UUID: [String: DirSnap]] = [:]
         for f in folders {
             guard let src = SourceStore.shared.source(f.sourceId), !src.kind.isMediaServer else { continue }
+            if dbs[src.id] == nil { dbs[src.id] = db(src.id).dirs }     // copy-on-write, no real copy
+            jobs.append((src, f, dbs[src.id]!))
+        }
+        let lang = AppSettings.shared.preferredSubLang
+        return await Task.detached(priority: .utility) { Self.assembleAll(jobs, lang: lang) }.value
+    }
+
+    nonisolated private static func assembleAll(_ jobs: [(MediaSource, LibraryFolder, [String: DirSnap])], lang: String) -> [ScanFound] {
+        var found: [ScanFound] = []
+        for (src, f, dirs) in jobs {
             if !f.dir.isDir {
                 var t = f.dir; t.meta["folder"] = f.id.uuidString
                 found.append(ScanFound(source: src, folder: f, file: t, parents: [], subs: []))
                 continue
             }
             let rootKey = f.dir.meta["root"] == "1" ? "__root__" : f.dir.id
-            assemble(src, f, rootKey: rootKey, rootParents: f.dir.meta["root"] == "1" ? [] : [f.dir.name], into: &found)
+            assemble(src, f, dirs, lang: lang, rootKey: rootKey, rootParents: f.dir.meta["root"] == "1" ? [] : [f.dir.name], into: &found)
         }
         return found
     }
@@ -473,14 +492,15 @@ final class ScanCenter: ObservableObject {
     func isCancelled(_ id: UUID) -> Bool { cancelled.contains(id) || SourceStore.shared.source(id) == nil }
 
     /// Walk the snapshot tree (no network) and turn it into found videos.
-    private func assemble(_ src: MediaSource, _ folder: LibraryFolder, rootKey: String, rootParents: [String], into found: inout [ScanFound]) {
-        let db = db(src.id)
+    nonisolated private static func assemble(_ src: MediaSource, _ folder: LibraryFolder, _ db: [String: DirSnap], lang: String,
+                                             rootKey: String, rootParents: [String], into found: inout [ScanFound]) {
         var stack: [(String, [String], Int)] = [(rootKey, rootParents, 0)]
         var seen = Set<String>()
         while let top = stack.popLast() {
             let (key, parents, depth) = top
             guard seen.insert(key).inserted, let snap = db[key], !snap.forbidden || !snap.children.isEmpty else { continue }
             let kids = snap.children
+            var side: SubtitleService.Sidecars?
             // Blu-ray / DVD folder = one movie: largest stream file, titled by this folder.
             if let disc = kids.first(where: { $0.isDir && ScanRules.isDiscDir($0.name) }),
                let best = discMain(db, disc) {
@@ -495,14 +515,15 @@ final class ScanCenter: ObservableObject {
                     }
                 } else if f.isVideo, !ScanRules.skipFile(f) {
                     var t = f; t.meta["folder"] = folder.id.uuidString
+                    if side == nil { side = SubtitleService.Sidecars(kids, lang: lang) }
                     found.append(ScanFound(source: src, folder: folder, file: t, parents: parents,
-                                           subs: SubtitleService.sidecars(for: f, in: kids)))
+                                           subs: side!.for(f)))
                 }
             }
         }
     }
 
-    private func discMain(_ db: SnapshotDB, _ disc: RemoteFile) -> RemoteFile? {
+    nonisolated private static func discMain(_ db: [String: DirSnap], _ disc: RemoteFile) -> RemoteFile? {
         guard let s = db[disc.id] else { return nil }
         var pool = s.children.filter { !$0.isDir && $0.isVideo }
         if let stream = s.children.first(where: { $0.isDir && $0.name.lowercased() == "stream" }), let ss = db[stream.id] {
@@ -648,7 +669,7 @@ private final class CrawlRun {
             listed += 1
             visited.insert(key)
             db.store(job.dir, listing: list)
-            if listed % 25 == 0 { db.flush() }      // survive the app being suspended / killed mid-scan
+            db.flushIfStale()      // survive the app being suspended / killed mid-scan (re-encoding the whole tree is costly: at most every 20 s)
             expand(job, db[key]?.children ?? [])
         } catch {
             if error is CancellationError { return }
