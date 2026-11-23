@@ -423,7 +423,7 @@ final class ScanCenter: ObservableObject {
 
     /// Crawl every library folder and return the videos found.
     /// force = list every dir now; otherwise only dirs whose snapshot is missing or past its adaptive TTL.
-    func collect(_ folders: [LibraryFolder], force: Bool, counts: @escaping (Int, Int, Int) -> Void = { _, _, _ in },
+    func collect(_ folders: [LibraryFolder], force: Bool, resume: Bool = false, counts: @escaping (Int, Int, Int) -> Void = { _, _, _ in },
                  progress: @escaping (String) -> Void) async -> ScanOutcome {
         var out = ScanOutcome()
         let bySource = Dictionary(grouping: folders, by: \.sourceId)
@@ -435,6 +435,7 @@ final class ScanCenter: ObservableObject {
                 continue
             }
             let run = CrawlRun(center: self, source: src, db: db(sid), gate: gate(src), force: force, progress: progress)
+            run.resumeWindow = resume ? 900 : 0
             let base = out.found.count
             let listedBase = out.listed + out.skipped
             run.counts = { found, left, read in counts(base + found, left, listedBase + read) }
@@ -583,6 +584,8 @@ private final class CrawlRun {
     let db: SnapshotDB
     let gate: SourceGate
     let force: Bool
+    /// Seconds within which a dir listed by an interrupted full rescan is trusted (0 = list everything).
+    var resumeWindow: TimeInterval = 0
     let progress: (String) -> Void
     private var pending: [String: ScanJob] = [:]
     private var inFlight = Set<String>()
@@ -654,7 +657,8 @@ private final class CrawlRun {
             return
         }
         // force = relist anything not verified in the last 15 min, so an interrupted full rescan resumes where it stopped
-        let recent = db[key].map { Date().timeIntervalSince($0.verifiedAt) < 900 } ?? false
+        // (only when the previous full rescan was cut short; a normal 重新扫描 lists every folder so new files always show)
+        let recent = resumeWindow > 0 && (db[key].map { Date().timeIntervalSince($0.verifiedAt) < resumeWindow } ?? false)
         let mustList = job.retry > 0 || (force ? !recent : db.isDue(key))
         if !mustList, let snap = db[key] {
             visited.insert(key)

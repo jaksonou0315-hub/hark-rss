@@ -310,12 +310,15 @@ final class LibraryStore: ObservableObject {
         }
         let matcher = Task { @MainActor [weak self] in await self?.matchLoop() }
 
-        let outcome = await ScanCenter.shared.collect(folders, force: force, counts: { [weak self] found, left, read in
+        let resume = force && UserDefaults.standard.bool(forKey: "lib.fullScanIncomplete")
+        if force { UserDefaults.standard.set(true, forKey: "lib.fullScanIncomplete") }
+        let outcome = await ScanCenter.shared.collect(folders, force: force, resume: resume, counts: { [weak self] found, left, read in
             self?.foldersLeft = left
             self?.foldersRead = read
             if let self, found > self.scanFound { self.scanFound = found }
         }) { [weak self] msg in self?.progress = msg }
         publisher.cancel()
+        if force { UserDefaults.standard.set(false, forKey: "lib.fullScanIncomplete") }
         let errors = outcome.errors
         let failedFolders = outcome.failedFolders
 
