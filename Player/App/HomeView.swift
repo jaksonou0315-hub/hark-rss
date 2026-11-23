@@ -1172,6 +1172,23 @@ struct BucketListView: View {
 struct LibrarySearchView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var q = ""
+    @AppStorage("search.history") private var historyRaw = ""
+    @State private var picks: [String] = []          // 推荐观看 item ids
+
+    private var history: [String] { historyRaw.isEmpty ? [] : historyRaw.components(separatedBy: "\n") }
+    private func remember(_ t: String) {
+        let t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        var h = history.filter { $0 != t }
+        h.insert(t, at: 0)
+        historyRaw = h.prefix(20).joined(separator: "\n")
+    }
+    private func shuffle() {
+        let pool = library.items.filter { $0.poster != nil }
+        let rated = pool.filter { ($0.shownRating ?? 0) >= 6.5 }
+        let src = rated.count >= 9 ? rated : pool
+        picks = Array(src.shuffled().prefix(9)).map(\.id)
+    }
 
     private var results: [LibraryItem] {
         let t = q.trimmingCharacters(in: .whitespaces)
@@ -1183,15 +1200,50 @@ struct LibrarySearchView: View {
         }
     }
 
+    private var tileWidth: CGFloat { max(90, (UIScreen.main.bounds.width - 32 - 24) / 3) }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 HomeStyle.bg.ignoresSafeArea()
                 ScrollView {
                     if q.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("类型").font(.title3.bold())
-                            FlowChips(items: Groupings.genres(library.items).map(\.name)) { q = $0 }
+                        VStack(alignment: .leading, spacing: 14) {
+                            if !history.isEmpty {
+                                HStack {
+                                    Text("历史记录").font(.title3.bold())
+                                    Spacer()
+                                    Button { historyRaw = "" } label: { Image(systemName: "trash").font(.title3) }
+                                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                                }
+                                ChipFlow(spacing: 10) {
+                                    ForEach(history, id: \.self) { h in
+                                        Button { q = h; remember(h) } label: {
+                                            Text(h).font(.subheadline).lineLimit(1)
+                                                .padding(.horizontal, 16).frame(height: 38)
+                                                .background(HomeStyle.card, in: Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.bottom, 8)
+                            }
+                            let items = picks.compactMap { id in library.items.first { $0.id == id } }
+                            if !items.isEmpty {
+                                HStack {
+                                    Text("推荐观看").font(.title3.bold())
+                                    Spacer()
+                                    Button { withAnimation { shuffle() } } label: {
+                                        HStack(spacing: 4) { Text("换一批"); Image(systemName: "arrow.clockwise") }.font(.subheadline)
+                                    }
+                                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                                }
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 18) {
+                                    ForEach(items) { it in
+                                        NavigationLink(value: it) { PosterTile(item: it, width: tileWidth) }.buttonStyle(.plain).categoryMenu(it)
+                                    }
+                                }
+                            }
                         }
                         .padding(16)
                     } else if results.isEmpty {
@@ -1200,6 +1252,7 @@ struct LibrarySearchView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                             ForEach(results) { it in
                                 NavigationLink(value: it) { PosterTile(item: it, width: 104) }.buttonStyle(.plain).categoryMenu(it)
+                                    .simultaneousGesture(TapGesture().onEnded { remember(q) })
                             }
                         }
                         .padding(16)
@@ -1209,6 +1262,9 @@ struct LibrarySearchView: View {
             }
             .navigationTitle("搜索")
             .searchable(text: $q, prompt: "影片、剧集、类型、文件名")
+            .onSubmit(of: .search) { remember(q) }
+            .onAppear { if picks.isEmpty { shuffle() } }
+            .onChange(of: library.items.count) { _, _ in if picks.isEmpty { shuffle() } }
             .navigationDestination(for: LibraryItem.self) { DetailView(itemId: $0.id) }
             .navigationDestination(for: ShelfRoute.self) { r in
                 switch r {
@@ -1218,6 +1274,30 @@ struct LibrarySearchView: View {
                 case .bl: ItemGridView(title: "BL", ids: [], bl: true)
                 }
             }
+        }
+    }
+}
+
+/// Wrapping row of chips sized to their own text (搜索历史).
+struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let sz = v.sizeThatFits(.init(width: maxW, height: nil))
+            if x > 0 && x + sz.width > maxW { x = 0; y += rowH + spacing; rowH = 0 }
+            x += sz.width + spacing; rowH = max(rowH, sz.height); widest = max(widest, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + rowH)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowH: CGFloat = 0
+        for v in subviews {
+            let sz = v.sizeThatFits(.init(width: bounds.width, height: nil))
+            if x > bounds.minX && x + sz.width > bounds.maxX { x = bounds.minX; y += rowH + spacing; rowH = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: .init(sz))
+            x += sz.width + spacing; rowH = max(rowH, sz.height)
         }
     }
 }
