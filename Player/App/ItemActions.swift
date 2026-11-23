@@ -228,6 +228,11 @@ struct EditInfoView: View {
     @State private var pickEpisode = 1
     @State private var seasonCount: [Int: Int] = [:]     // tmdb id → 季数
     @State private var episodeCount: [String: Int] = [:]  // "id|季" → 集数
+    @State private var pickerFor: NumberPick?
+    enum NumberPick: Identifiable {
+        case season(Int, Int), episode(Int, Int)            // (tmdb id, 总数)
+        var id: String { switch self { case .season(let a, _): "s\(a)"; case .episode(let a, _): "e\(a)" } }
+    }
 
     var body: some View {
         NavigationStack {
@@ -297,6 +302,16 @@ struct EditInfoView: View {
                 }
             }
             .sheet(isPresented: $showRules) { NamingRulesView() }
+            .sheet(item: $pickerFor) { p in
+                switch p {
+                case .season(let id, let n):
+                    NumberGridPicker(title: "选择季", unit: "季", count: n, current: pickSeason) { v in
+                        pickSeason = v; pickEpisode = 1; Task { await loadEpisodes(id, v) }
+                    }
+                case .episode(_, let n):
+                    NumberGridPicker(title: "选择集", unit: "集", count: n, current: pickEpisode) { v in pickEpisode = v }
+                }
+            }
             .task {
                 query = item.title
                 tv = item.isTV
@@ -329,14 +344,8 @@ struct EditInfoView: View {
         let seasons = max(seasonCount[m.id] ?? 0, pickSeason, 1)
         let eps = max(episodeCount["\(m.id)|\(pickSeason)"] ?? 0, pickEpisode, 1)
         HStack(spacing: 8) {
-            Menu {
-                ForEach(1...max(seasons, 1), id: \.self) { n in
-                    Button("第\(n)季") { pickSeason = n; pickEpisode = 1; Task { await loadEpisodes(m.id, n) } }
-                }
-            } label: { chip("第\(pickSeason)季") }
-            Menu {
-                ForEach(1...max(eps, 1), id: \.self) { n in Button("第\(n)集") { pickEpisode = n } }
-            } label: { chip("第\(pickEpisode)集") }
+            Button { pickerFor = .season(m.id, seasons) } label: { chip("第\(pickSeason)季") }
+            Button { pickerFor = .episode(m.id, eps) } label: { chip("第\(pickEpisode)集") }
             Button { save() } label: { chip(saving ? "保存中" : "确认") }
                 .disabled(saving)
         }
@@ -384,6 +393,42 @@ struct EditInfoView: View {
         if let cur = item.tmdbId, let i = r.firstIndex(where: { $0.id == cur }), i > 0 { r.insert(r.remove(at: i), at: 0) }
         results = r
         loading = false
+    }
+}
+
+/// 第几季 / 第几集 选择：独立的数字网格（长剧几百集也不会跳回顶部）
+struct NumberGridPicker: View {
+    let title: String
+    let unit: String
+    let count: Int
+    let current: Int
+    let onPick: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let cols = [GridItem(.adaptive(minimum: 58), spacing: 8)]
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: cols, spacing: 8) {
+                        ForEach(1...max(count, 1), id: \.self) { n in
+                            Button { onPick(n); dismiss() } label: {
+                                Text("\(n)").font(.body.monospacedDigit().weight(n == current ? .bold : .regular))
+                                    .frame(maxWidth: .infinity).frame(height: 44)
+                                    .foregroundStyle(n == current ? .white : .primary)
+                                    .background(n == current ? Color.green : Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain).id(n)
+                        }
+                    }
+                    .padding(16)
+                }
+                .onAppear { proxy.scrollTo(current, anchor: .center) }
+            }
+            .navigationTitle(title + " · 共 \(max(count, 1)) " + unit)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
