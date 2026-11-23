@@ -260,6 +260,9 @@ struct TMDBDetails {
     var certification: String?
     var related: [Int] = []     // TMDB recommendations + similar, best first
     var keywords: [String] = [] // lowercased
+    var collectionId: Int? = nil
+    var collectionName: String? = nil
+    var collectionPoster: URL? = nil
 }
 
 extension TMDB {
@@ -333,7 +336,10 @@ extension TMDB {
                             }(),
                             keywords: ((o.dict("keywords")?.arr(tv ? "results" : "keywords")) ?? []).compactMap { $0.str("name")?.lowercased() }
                                 + (o.arr("networks") + o.arr("production_companies")).compactMap { $0.str("name").map { "net:" + $0.lowercased() } }
-                                + ["#v2"])
+                                + ["#v2", "#v3"],
+                            collectionId: o.dict("belongs_to_collection")?.int("id"),
+                            collectionName: o.dict("belongs_to_collection")?.str("name"),
+                            collectionPoster: o.dict("belongs_to_collection")?.str("poster_path").flatMap { URL(string: imageBase + "w500" + $0) })
         store(key, d)
         return d
     }

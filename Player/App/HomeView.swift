@@ -36,6 +36,7 @@ enum ShelfRoute: Hashable {
     case items(String, [String])          // title, item ids
     case buckets(String, [Bucket])
     case bl
+    case collection(String, [String])     // TMDB movie collection: name, item ids
 }
 
 struct ContinueEntry: Identifiable {
@@ -356,7 +357,8 @@ struct HomeView: View {
             .navigationDestination(for: LibraryItem.self) { DetailView(itemId: $0.id) }
             .navigationDestination(for: ShelfRoute.self) { r in
                 switch r {
-                case .items(let t, let ids): ItemGridView(title: t, ids: ids)
+                case .items(let t, let ids): ItemGridView(title: t, ids: ids, groupCollections: t == "电影" || t == "动画电影")
+                case .collection(let t, let ids): ItemGridView(title: t, ids: ids, sortByYear: true)
                 case .buckets(let t, let b): BucketListView(title: t, buckets: b)
                 case .bl: ItemGridView(title: "BL", ids: [], bl: true)
                 }
@@ -811,6 +813,8 @@ struct ItemGridView: View {
     let title: String
     let ids: [String]
     var bl = false
+    var groupCollections = false
+    var sortByYear = false
     @EnvironmentObject var library: LibraryStore
     @State private var sort = 0
     @State private var blTab: Groupings.BLSub? = nil
@@ -833,8 +837,32 @@ struct ItemGridView: View {
         case 1: return xs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case 2: return xs.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
         case 3: return xs.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-        default: return xs
+        default: return sortByYear ? xs.sorted { ($0.year ?? 9999, $0.title) < ($1.year ?? 9999, $1.title) } : xs
         }
+    }
+
+    private enum Entry: Identifiable {
+        case item(LibraryItem)
+        case col(Int, String, URL?, [LibraryItem])
+        var id: String { switch self { case .item(let i): return i.id; case .col(let c, _, _, _): return "col-\(c)" } }
+    }
+
+    /// Movies sharing a TMDB collection (2+ in this grid) fold into one tile at the first member's position.
+    private var entries: [Entry] {
+        let xs = items
+        guard groupCollections, !selecting else { return xs.map { .item($0) } }
+        var members: [Int: [LibraryItem]] = [:]
+        for it in xs where !it.isTV { if let c = it.collectionId { members[c, default: []].append(it) } }
+        var out: [Entry] = []; var done = Set<Int>()
+        for it in xs {
+            if !it.isTV, let c = it.collectionId, let m = members[c], m.count >= 2 {
+                if done.insert(c).inserted {
+                    let sorted = m.sorted { ($0.year ?? 9999) < ($1.year ?? 9999) }
+                    out.append(.col(c, it.collectionName ?? it.title, it.collectionPoster ?? sorted.first?.poster, sorted))
+                }
+            } else { out.append(.item(it)) }
+        }
+        return out
     }
 
     var body: some View {
@@ -843,7 +871,13 @@ struct ItemGridView: View {
             ScrollView {
                 if bl { blTabs }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
-                    ForEach(items) { it in
+                    ForEach(entries) { e in
+                      switch e {
+                      case .col(_, let name, let poster, let ms):
+                        NavigationLink(value: ShelfRoute.collection(name, ms.map(\.id))) {
+                            CollectionTile(name: name, poster: poster, count: ms.count, width: 104)
+                        }.buttonStyle(.plain)
+                      case .item(let it):
                         if selecting {
                             Button { toggle(it.id) } label: {
                                 PosterTile(item: it, width: 104)
@@ -864,6 +898,7 @@ struct ItemGridView: View {
                                     CategoryMenuItems(item: it, flat: true)
                                 }
                         }
+                      }
                     }
                 }
                 .padding(16)
@@ -1041,7 +1076,8 @@ struct LibrarySearchView: View {
             .navigationDestination(for: LibraryItem.self) { DetailView(itemId: $0.id) }
             .navigationDestination(for: ShelfRoute.self) { r in
                 switch r {
-                case .items(let t, let ids): ItemGridView(title: t, ids: ids)
+                case .items(let t, let ids): ItemGridView(title: t, ids: ids, groupCollections: t == "电影" || t == "动画电影")
+                case .collection(let t, let ids): ItemGridView(title: t, ids: ids, sortByYear: true)
                 case .buckets(let t, let b): BucketListView(title: t, buckets: b)
                 case .bl: ItemGridView(title: "BL", ids: [], bl: true)
                 }
@@ -1063,5 +1099,36 @@ struct FlowChips: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+
+/// A TMDB movie collection shown as one stacked poster in the 电影 grid.
+struct CollectionTile: View {
+    let name: String
+    let poster: URL?
+    let count: Int
+    var width: CGFloat = 104
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.12))
+                    .frame(width: width - 16, height: width * 1.5).offset(y: -8)
+                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.2))
+                    .frame(width: width - 8, height: width * 1.5).offset(y: -4)
+                PosterImage(url: poster, title: name)
+                    .frame(width: width, height: width * 1.5)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        Text("\(count)").font(.caption.weight(.heavy).monospacedDigit()).foregroundStyle(.white)
+                            .padding(.horizontal, 7).frame(height: 22).background(Capsule().fill(.black.opacity(0.55))).padding(6)
+                    }
+            }
+            .padding(.top, 8)
+            Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Text("\(count) 部电影").font(.caption).foregroundStyle(.white.opacity(0.6))
+        }
+        .frame(width: width)
+        .contentShape(Rectangle())
     }
 }
