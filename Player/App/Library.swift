@@ -504,6 +504,58 @@ final class LibraryStore: ObservableObject {
     }
     var removedCount: Int { Self.excludedFiles().count }
 
+    /// Library items whose files live in this drive folder (or below it).
+    func items(under source: MediaSource, dir: RemoteFile?) -> [LibraryItem] {
+        guard let dir else { return items.filter { $0.files.contains { $0.sourceId == source.id } } }
+        let p = dir.path.hasSuffix("/") ? String(dir.path.dropLast()) : dir.path
+        let seg = "/\(dir.name)/"
+        return items.filter { it in it.files.contains { lf in
+            guard lf.sourceId == source.id else { return false }
+            if !p.isEmpty, lf.file.path.hasPrefix(p + "/") { return true }
+            let dp = (lf.file.meta["dirPath"] ?? "") + "/"
+            return dp.contains(seg) || lf.file.path.contains(seg)
+        } }
+    }
+
+    /// 长按「重新扫描」 on a drive folder: relist it and everything under it now, rebuild, match what's new.
+    func rescanDir(source: MediaSource, dir: RemoteFile?) async {
+        guard !source.kind.isMediaServer else { await scan(force: true); return }
+        let name = dir?.name ?? source.name
+        progress = "正在重新扫描 \(name)…"
+        defer { progress = "" }
+        let center = ScanCenter.shared
+        let run = CrawlRunHandle.make(center: center, source: source, db: center.db(source.id), gate: center.gate(source), force: true) { [weak self] m in self?.progress = m }
+        await run(dir)
+        center.db(source.id).flush()
+        let before = Set(items.map(\.id))
+        let f = await center.snapshotFound(folders)
+        let current = items
+        let (built, _) = await Task.detached(priority: .userInitiated) { Self.buildItems(f, current: current) }.value
+        // only touch items from this folder; everything else stays as it was
+        let touched = Set(built.filter { b in b.files.contains { lf in
+            lf.sourceId == source.id && (dir == nil || (lf.file.meta["dirPath"] ?? "").contains("/\(name)") || lf.file.path.contains("/\(name)/") || (!(dir?.path.isEmpty ?? true) && lf.file.path.hasPrefix(dir!.path)))
+        } }.map(\.id))
+        let removedUnder = Set(items(under: source, dir: dir).map(\.id))
+        var next = items.filter { !touched.contains($0.id) && !removedUnder.contains($0.id) }
+        next.insert(contentsOf: built.filter { touched.contains($0.id) }, at: 0)
+        items = next
+        save()
+        for it in built where touched.contains(it.id) {
+            if !before.contains(it.id) && it.tmdbId == nil, overrides[it.id] == nil {
+                progress = "正在匹配海报：\(it.title)"
+                var m: TMDBMatch?
+                if let tid = it.files.lazy.compactMap({ TMDB.idInPath($0.file.path + "/" + $0.file.name) }).first { m = await TMDB.byId(tid, tv: it.isTV) }
+                if m == nil { m = await TMDB.search(title: it.title, year: it.year, tv: it.isTV) }
+                if let m { await applyMatch(it.id, m); overrides[it.id] = nil }
+            } else if it.isTV, it.files.contains(where: { $0.episodeTitle == nil && $0.episode != nil }) {
+                await fillEpisodes(it.id)
+            }
+        }
+        save()
+        TMDBCache.shared.flush()
+        Task { await enrich() }
+    }
+
     /// 单片「重新扫描文件」: relist the folders this item's files live in, rebuild, rematch it.
     func rescanItem(_ itemId: String) async {
         guard let it = items.first(where: { $0.id == itemId }) else { return }

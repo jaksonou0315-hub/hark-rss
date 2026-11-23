@@ -566,10 +566,10 @@ final class ScanCenter: ObservableObject {
 
 /// Lets other files start a one-folder crawl without exposing CrawlRun.
 enum CrawlRunHandle {
-    @MainActor static func make(center: ScanCenter, source: MediaSource, db: SnapshotDB, gate: SourceGate,
+    @MainActor static func make(center: ScanCenter, source: MediaSource, db: SnapshotDB, gate: SourceGate, force: Bool = false,
                                 progress: @escaping (String) -> Void) -> (RemoteFile?) async -> Void {
         { dir in
-            let run = CrawlRun(center: center, source: source, db: db, gate: gate, force: false, progress: progress)
+            let run = CrawlRun(center: center, source: source, db: db, gate: gate, force: force, progress: progress)
             run.enqueue(dir: dir, depth: 0, type: .userTriggered)
             await run.run()
         }

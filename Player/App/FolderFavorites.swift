@@ -57,6 +57,11 @@ struct FavoriteSourcesView: View {
     @ObservedObject private var favs = FolderFavorites.shared
     @State private var path = NavigationPath()
     @State private var editing: MediaSource?
+    @EnvironmentObject var library: LibraryStore
+    @State private var toast: String?
+    @State private var editItem: LibraryItem?
+    @State private var pickList: [LibraryItem] = []
+    @State private var showPick = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -84,6 +89,12 @@ struct FavoriteSourcesView: View {
                                             Text(f.title).font(.headline).lineLimit(1)
                                             Label(s.name, systemImage: s.kind.icon).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                         }
+                                        Spacer(minLength: 0)
+                                        Button { favs.remove(f); toast = "已取消收藏，并从媒体库移除" } label: {
+                                            Image(systemName: "star.fill").foregroundStyle(.yellow).frame(width: 44, height: 44).contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .accessibilityLabel("取消收藏")
                                     }
                                     .padding(.vertical, 4)
                                 }
@@ -92,7 +103,17 @@ struct FavoriteSourcesView: View {
                                     Button(role: .destructive) { favs.remove(f) } label: { Label("取消收藏", systemImage: "star.slash") }
                                 }
                                 .contextMenu {
-                                    Button(role: .destructive) { favs.remove(f) } label: { Label("取消收藏", systemImage: "star.slash") }
+                                    Button {
+                                        toast = "正在重新扫描 \(f.title)…"
+                                        Task { await library.rescanDir(source: s, dir: f.dir); toast = "已重新扫描 \(f.title)" }
+                                    } label: { Label("重新扫描", systemImage: "arrow.clockwise") }
+                                    Button {
+                                        let xs = library.items(under: s, dir: f.dir)
+                                        if xs.count == 1 { editItem = xs[0] }
+                                        else if xs.isEmpty { toast = "这个文件夹里还没有扫进媒体库的影片" }
+                                        else { pickList = xs; showPick = true }
+                                    } label: { Label("编辑匹配", systemImage: "square.and.pencil") }
+                                    Button(role: .destructive) { favs.remove(f); toast = "已取消收藏，并从媒体库移除" } label: { Label("取消收藏", systemImage: "star.slash") }
                                 }
                             }
                         }
@@ -100,6 +121,14 @@ struct FavoriteSourcesView: View {
                     }
                     .scrollContentBackground(.hidden)
                 }
+                if let t = toast {
+                    VStack { Spacer(); Text(t).font(.footnote).padding(.horizontal, 16).padding(.vertical, 10).glass(in: Capsule()).padding(.bottom, 90) }
+                        .task(id: t) { try? await Task.sleep(nanoseconds: 2_500_000_000); if toast == t { toast = nil } }
+                }
+            }
+            .sheet(item: $editItem) { EditInfoView(item: $0).environmentObject(library) }
+            .confirmationDialog("选择要编辑匹配的影片", isPresented: $showPick, titleVisibility: .visible) {
+                ForEach(pickList.prefix(15)) { it in Button(it.year.map { "\(it.title) (\($0))" } ?? it.title) { editItem = it } }
             }
             .navigationTitle("文件源")
             .navigationDestination(for: BrowseTarget.self) {

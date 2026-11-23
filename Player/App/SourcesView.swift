@@ -87,6 +87,9 @@ struct FolderView: View {
     @State private var error: String?
     @State private var showAll = false
     @State private var toast: String?
+    @State private var editItem: LibraryItem?
+    @State private var pickList: [LibraryItem] = []
+    @State private var showPick = false
     @State private var pushDir: RemoteFile?
     @State private var opening: String?
     @ObservedObject private var favs = FolderFavorites.shared
@@ -217,6 +220,26 @@ struct FolderView: View {
         .task(id: files.count) { await rebuildSmartMap() }
         .onReceive(library.$items.debounce(for: .seconds(3), scheduler: RunLoop.main)) { _ in Task { await rebuildSmartMap() } }
         .navigationDestination(item: $pushDir) { d in FolderView(target: BrowseTarget(source: target.source, dir: d)) }
+        .sheet(item: $editItem) { EditInfoView(item: $0).environmentObject(library) }
+        .confirmationDialog("选择要编辑匹配的影片", isPresented: $showPick, titleVisibility: .visible) {
+            ForEach(pickList.prefix(15)) { it in Button(it.year.map { "\(it.title) (\($0))" } ?? it.title) { editItem = it } }
+        }
+    }
+
+    /// 长按文件夹：重新扫描 / 编辑匹配
+    @ViewBuilder private func folderActions(_ f: RemoteFile) -> some View {
+        Button {
+            toast = "正在重新扫描 \(f.name)…"
+            let src = currentSource
+            Task { await library.rescanDir(source: src, dir: f); toast = "已重新扫描 \(f.name)" }
+        } label: { Label("重新扫描", systemImage: "arrow.clockwise") }
+        Button { editMatch(f) } label: { Label("编辑匹配", systemImage: "square.and.pencil") }
+    }
+    private func editMatch(_ f: RemoteFile) {
+        let xs = library.items(under: currentSource, dir: f)
+        if xs.count == 1 { editItem = xs[0] }
+        else if xs.isEmpty { toast = "这个文件夹里还没有扫进媒体库的影片" }
+        else { pickList = xs; showPick = true }
     }
 
     /// 智能文件夹: a folder holding a single video plays it straight away.
@@ -268,6 +291,7 @@ struct FolderView: View {
                 .buttonStyle(.plain)
                 .contextMenu {
                     favButton(f)
+                    folderActions(f)
                     Button { pushDir = f } label: { Label("打开文件夹", systemImage: "folder") }
                     Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
                 }
@@ -276,6 +300,7 @@ struct FolderView: View {
                 .buttonStyle(.plain)
                 .contextMenu {
                     favButton(f)
+                    folderActions(f)
                     Button { library.addFolder(source: target.source, dir: f); toast = "已添加到媒体库，正在扫描" } label: { Label("添加到媒体库", systemImage: "rectangle.stack.badge.plus") }
                 }
         } else {
