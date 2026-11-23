@@ -111,7 +111,49 @@ final class AITranslateConfig: ObservableObject {
     var isReady: Bool { (!apiKey.isEmpty || provider == .custom) && !model.isEmpty && URL(string: baseURL) != nil }
 }
 
+/// Cumulative token usage per model on this device.
+enum AIUsage {
+    struct Row: Identifiable { var id: String { model }; let model: String; let input: Int; let output: Int; let calls: Int }
+    private static let key = "aitr.usage"
+    static func add(model: String, input: Int, output: Int) {
+        DispatchQueue.main.async {
+            var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]]) ?? [:]
+            var r = all[model] ?? [0, 0, 0]
+            if r.count < 3 { r = [0, 0, 0] }
+            r[0] += input; r[1] += output; r[2] += 1
+            all[model] = r
+            UserDefaults.standard.set(all, forKey: key)
+        }
+    }
+    static var rows: [Row] {
+        let all = (UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]]) ?? [:]
+        return all.compactMap { k, v in v.count >= 3 ? Row(model: k, input: v[0], output: v[1], calls: v[2]) : nil }
+            .sorted { $0.input + $0.output > $1.input + $1.output }
+    }
+    static func reset() { UserDefaults.standard.removeObject(forKey: key) }
+}
+
 enum AITranslator {
+    /// GET {base}/models (OpenAI-compatible; Claude uses x-api-key).
+    static func listModels() async throws -> [String] {
+        let cfg = AITranslateConfig.shared
+        let base = cfg.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let u = URL(string: base + "/models") else { throw AppError.message("接口地址无效") }
+        var req = URLRequest(url: u); req.timeoutInterval = 20
+        if cfg.provider == .claude {
+            req.setValue(cfg.apiKey, forHTTPHeaderField: "x-api-key")
+            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        } else if !cfg.apiKey.isEmpty {
+            req.setValue("Bearer \(cfg.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code) else { throw AppError.message("获取模型失败（\(code)）") }
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let arr = (obj?["data"] as? [[String: Any]]) ?? (obj?["models"] as? [[String: Any]]) ?? []
+        return arr.compactMap { ($0["id"] as? String) ?? ($0["name"] as? String) }.sorted()
+    }
+
     static func languageName(_ code: String) -> String {
         switch code {
         case "zh-Hans": return "简体中文"
@@ -155,6 +197,11 @@ enum AITranslator {
             let msg = ((obj?["error"] as? [String: Any])?["message"] as? String) ?? (obj?["message"] as? String)
                 ?? String(data: data.prefix(200), encoding: .utf8) ?? ""
             throw AppError.message("\(cfg.provider.title) 返回 \(code)：\(msg)")
+        }
+        if let u = obj?["usage"] as? [String: Any] {
+            let inT = (u["prompt_tokens"] as? Int) ?? (u["input_tokens"] as? Int) ?? 0
+            let outT = (u["completion_tokens"] as? Int) ?? (u["output_tokens"] as? Int) ?? 0
+            AIUsage.add(model: cfg.model, input: inT, output: outT)
         }
         if cfg.provider == .claude {
             let parts = (obj?["content"] as? [[String: Any]]) ?? []
@@ -281,6 +328,9 @@ struct AITranslateSettings: View {
     @ObservedObject private var settings = AppSettings.shared
     @State private var testing = false
     @State private var testResult: String?
+    @State private var models: [String] = []
+    @State private var fetching = false
+    @State private var modelNote: String?
 
     var body: some View {
         Section {
@@ -293,7 +343,21 @@ struct AITranslateSettings: View {
                 Text("模型").foregroundStyle(.secondary)
                 TextField(cfg.provider.defaultModel, text: $cfg.model)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().multilineTextAlignment(.trailing)
+                Menu {
+                    if models.isEmpty { Text("点「获取模型列表」") }
+                    ForEach(models, id: \.self) { m in Button(m) { cfg.model = m } }
+                } label: { Image(systemName: "chevron.up.chevron.down") }
             }
+            Button {
+                fetching = true; modelNote = nil
+                Task {
+                    do { models = try await AITranslator.listModels(); modelNote = "已获取 \(models.count) 个模型" }
+                    catch { modelNote = error.localizedDescription }
+                    fetching = false
+                }
+            } label: { HStack { Text("获取模型列表"); if fetching { Spacer(); ProgressView() } } }
+            .disabled(fetching || URL(string: cfg.baseURL) == nil)
+            if let n = modelNote { Text(n).font(.footnote).foregroundStyle(.secondary) }
             HStack {
                 Text("接口地址").foregroundStyle(.secondary)
                 TextField(cfg.provider.defaultBase, text: $cfg.baseURL)
@@ -306,13 +370,29 @@ struct AITranslateSettings: View {
             Toggle("保留原文（双语）", isOn: $settings.bilingualSubs)
             Stepper("每次请求 \(cfg.batchSize) 句", value: $cfg.batchSize, in: 10...120, step: 10)
             Stepper("同时请求 \(cfg.concurrency) 个", value: $cfg.concurrency, in: 1...8)
-            TextField("额外要求（可选），如：人名保留英文、口语化", text: $cfg.extraPrompt, axis: .vertical)
-                .lineLimit(1...3)
+            NavigationLink {
+                Form {
+                    Section {
+                        TextField("如：人名保留英文、口语化、粤语对白翻成普通话", text: $cfg.extraPrompt, axis: .vertical)
+                            .lineLimit(4...12)
+                    } footer: { Text("会附加在 AI 翻译的提示词后面。留空用默认规则。") }
+                }
+                .navigationTitle("自定义翻译规则")
+            } label: {
+                LabeledContent("自定义翻译规则", value: cfg.extraPrompt.isEmpty ? "默认" : "已设置")
+            }
             Button {
                 testing = true; testResult = nil
                 Task { testResult = await AITranslator.test(); testing = false }
             } label: {
-                HStack { Text("测试连接"); if testing { Spacer(); ProgressView() } }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("测试翻译服务")
+                        Text("发送一句测试字幕，确认当前配置可以完成翻译。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if testing { ProgressView() } else { Image(systemName: "globe") }
+                }
             }
             .disabled(testing || !cfg.isReady)
             if let r = testResult { Text(r).font(.footnote).foregroundStyle(r.hasPrefix("连接成功") ? .green : .orange) }

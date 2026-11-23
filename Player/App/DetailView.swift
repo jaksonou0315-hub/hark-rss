@@ -717,7 +717,7 @@ struct DetailView: View {
     private func play(_ f: LibraryFile, _ item: LibraryItem) {
         guard let src = sources.source(f.sourceId) else { return }
         let t = item.isTV ? "\(item.title) 第\(f.episode ?? 0)集" : item.title
-        router.play(PlayRequest(source: src, file: f.file, siblings: [], title: t, extraSubtitles: f.subtitles))
+        router.play(PlayRequest(source: src, file: f.file, siblings: [], title: t, extraSubtitles: f.subtitles, itemId: item.id, fileId: f.id))
     }
 }
 

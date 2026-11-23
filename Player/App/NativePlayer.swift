@@ -16,8 +16,11 @@ enum EngineChooser {
 
 struct PlayerEntry: View {
     let request: PlayRequest
+    @State private var current: PlayRequest?
     var body: some View {
-        if EngineChooser.useNative(request) { NativePlayerView(request: request) } else { PlayerView(request: request) }
+        let r = current ?? request
+        if EngineChooser.useNative(r) { NativePlayerView(request: r).id(r.id) }
+        else { PlayerView(request: r, onNext: { current = $0 }).id(r.id) }
     }
 }
 
@@ -169,8 +172,9 @@ struct AVPlayerVC: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
-        vc.allowsPictureInPicturePlayback = true
-        vc.canStartPictureInPictureAutomaticallyFromInline = false
+        let d = UserDefaults.standard
+        vc.allowsPictureInPicturePlayback = d.object(forKey: "av.pip") as? Bool ?? true
+        vc.canStartPictureInPictureAutomaticallyFromInline = vc.allowsPictureInPicturePlayback && (d.object(forKey: "av.pipAuto") as? Bool ?? true)
         vc.delegate = context.coordinator
         // watch taps (without stealing them) so our close button shows/hides together with the system controls
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coord.tapped))
@@ -191,6 +195,8 @@ struct AVPlayerVC: UIViewControllerRepresentable {
         @objc func tapped() { tap() }
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
         func playerViewController(_ vc: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator c: UIViewControllerTransitionCoordinator) { done() }
+        func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(_ vc: AVPlayerViewController) -> Bool { false }
+        func playerViewController(_ vc: AVPlayerViewController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) { completionHandler(true) }
     }
 }
 

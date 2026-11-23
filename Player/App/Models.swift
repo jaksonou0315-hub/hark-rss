@@ -149,6 +149,8 @@ struct PlayRequest: Identifiable {
     var siblings: [RemoteFile] = []
     var title: String? = nil
     var extraSubtitles: [RemoteFile] = []
+    var itemId: String? = nil      // library item (for next episode / intro skip)
+    var fileId: String? = nil      // LibraryFile id
 }
 
 enum AppError: LocalizedError {

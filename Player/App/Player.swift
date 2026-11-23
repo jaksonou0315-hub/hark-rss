@@ -60,6 +60,20 @@ final class PlayerController: NSObject, ObservableObject {
     private var didAutoOnline = false
     private var startedAt = Date()
 
+    // intro / credits
+    @Published var segments = SkipSegments()
+    @Published var activeSkip: (label: String, to: Int32?)? = nil   // shown as 「跳过片头」 pill; to nil = end
+    private var skipped = Set<String>()
+    private var segFetched = false
+    private(set) lazy var nextRequest: PlayRequest? = Self.findNext(request)
+    var onNext: ((PlayRequest) -> Void)?
+
+    /// Series / film key used for manual intro / credits marks.
+    var segKey: String {
+        if let i = request.itemId { return i }
+        return (request.file.path as NSString).deletingLastPathComponent
+    }
+
     init(_ r: PlayRequest) {
         request = r
         title = r.title ?? (r.file.name as NSString).deletingPathExtension
@@ -82,6 +96,8 @@ final class PlayerController: NSObject, ObservableObject {
             let p = try await DownloadStore.shared.playable(provider, request.file)
             playable = p
             engine.open(p)
+            let dr = Float(PlayerPrefs.defaultRate)
+            if abs(dr - 1) > 0.01 { engine.setRate(dr); rate = dr }
             startedAt = Date()
             startTimer()
             // sidecar subtitles: server-provided URLs + files next to the video (downloaded and re-encoded to UTF-8)
@@ -128,8 +144,11 @@ final class PlayerController: NSObject, ObservableObject {
         if st == .ended, !ended {
             ended = true
             if let k = playable?.resumeKey { Resume.clear(k) }
+            if PlayerPrefs.autoNext, let n = nextRequest, let f = onNext { f(n); return }
         }
         guard playing else { return }
+        if !segFetched, lengthMs > 0 { segFetched = true; Task { await loadSegments() } }
+        checkSkips()
         if engine is MPVEngine, timeMs > 3000 { MPVGuard.clear() }
 
         if !pendingSubs.isEmpty {
@@ -164,6 +183,88 @@ final class PlayerController: NSObject, ObservableObject {
             }
         }
     }
+
+    // MARK: next episode
+
+    static func findNext(_ r: PlayRequest) -> PlayRequest? {
+        if let iid = r.itemId, let fid = r.fileId,
+           let item = LibraryStore.shared.items.first(where: { $0.id == iid }), item.isTV {
+            let eps = item.files.filter { $0.episode != nil }
+                .sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
+            guard let i = eps.firstIndex(where: { $0.id == fid }), i + 1 < eps.count else { return nil }
+            let f = eps[i + 1]
+            guard let src = SourceStore.shared.source(f.sourceId) else { return nil }
+            return PlayRequest(source: src, file: f.file, siblings: [], title: "\(item.title) 第\(f.episode ?? 0)集",
+                               extraSubtitles: f.subtitles, itemId: iid, fileId: f.id)
+        }
+        let vids = r.siblings.filter { $0.isVideo }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        guard let i = vids.firstIndex(where: { $0.id == r.file.id }), i + 1 < vids.count else { return nil }
+        return PlayRequest(source: r.source, file: vids[i + 1], siblings: r.siblings)
+    }
+
+    func playNext() {
+        guard let n = nextRequest, let f = onNext else { toast = "没有下一集了"; return }
+        if let k = playable?.resumeKey { Resume.clear(k) }
+        f(n)
+    }
+
+    // MARK: intro / credits
+
+    private func loadSegments() async {
+        var seg = SkipSegments()
+        if PlayerPrefs.onlineSegments, let iid = request.itemId,
+           let item = LibraryStore.shared.items.first(where: { $0.id == iid }), let tid = item.tmdbId {
+            let lf = item.files.first { $0.id == request.fileId }
+            if let r = await IntroDB.fetch(tmdbId: tid, tv: item.isTV, season: lf?.season, episode: lf?.episode, durationMs: lengthMs) { seg = r }
+        }
+        let m = ManualSegments.get(segKey)
+        if let e = m.introEnd { seg.intro = .init(start: 0, end: e); seg.recap = nil }
+        if let c = m.creditsStart, lengthMs > c { seg.credits = .init(start: lengthMs - c, end: nil) }
+        segments = seg
+    }
+
+    func reloadSegments() { Task { await loadSegments() } }
+
+    private func checkSkips() {
+        let t = timeMs
+        func inside(_ s: SkipSegments.Seg?) -> Bool {
+            guard let s else { return false }
+            return t >= s.start && t < (s.end ?? lengthMs) - 500
+        }
+        var pill: (String, Int32?)? = nil
+        let list: [(String, String, SkipSegments.Seg?, Bool)] = [
+            ("intro", "跳过片头", segments.intro, PlayerPrefs.skipIntro),
+            ("recap", "跳过回顾", segments.recap, PlayerPrefs.skipIntro),
+            ("credits", "跳过片尾", segments.credits, PlayerPrefs.skipCredits),
+            ("preview", "跳过预告", segments.preview, PlayerPrefs.skipPreview),
+        ]
+        for (k, label, s, auto) in list where inside(s) {
+            if auto && !skipped.contains(k) {
+                skipped.insert(k)
+                doSkip(k, to: s?.end)
+                return
+            }
+            pill = (label, s?.end)
+        }
+        let cur = activeSkip.map { "\($0.label)\($0.to ?? -1)" }
+        let new = pill.map { "\($0.0)\($0.1 ?? -1)" }
+        if cur != new { activeSkip = pill.map { (label: $0.0, to: $0.1) } }
+    }
+
+    /// to nil = runs to the end: go to next episode when there is one, otherwise jump to the last seconds.
+    func doSkip(_ kind: String, to: Int32?) {
+        activeSkip = nil
+        if let to, to < lengthMs - 3000 {
+            engine.seek(ms: to)
+            toast = kind == "credits" ? "已跳过片尾（保留彩蛋）" : kind == "preview" ? "已跳过预告" : kind == "recap" ? "已跳过回顾" : "已跳过片头"
+        } else if (kind == "credits" || kind == "preview"), PlayerPrefs.autoNext, nextRequest != nil {
+            playNext()
+        } else {
+            engine.seek(ms: max(0, lengthMs - 1500))
+        }
+    }
+
+    func skipActive() { if let a = activeSkip { doSkip(a.label == "跳过片尾" ? "credits" : "intro", to: a.to) } }
 
     private func computeBadges() {
         var b: [String] = []
@@ -331,25 +432,73 @@ struct PlayerView: View {
     @State private var showOnline = false
     @State private var landscape = false
     @State private var trackSheet: TrackSheetKind?
-    @AppStorage("ctl.seek") private var seekStep = 10
+    @AppStorage("ctl.fwd") private var fwdStep = 10
+    @AppStorage("ctl.back") private var backStep = 10
     @AppStorage("ctl.hide") private var hideAfter = 4.0
-    @AppStorage("ctl.doubleTap") private var doubleTapSeek = true
+    @AppStorage("ctl.dtCenter") private var dtCenter = "play"     // play | none
+    @AppStorage("ctl.dtSides") private var dtSides = "seek"       // seek | play | none
+    @AppStorage("ctl.swipeLevels") private var swipeLevels = true
+    @AppStorage("ctl.pinch") private var pinchZoom = true
+    @AppStorage("ctl.lockGestures") private var lockGestures = true
+    @AppStorage("ctl.longPress") private var longPressOn = true
+    @AppStorage("ctl.longRate") private var longRate = 2.0
+    @AppStorage("ctl.longSlide") private var longSlide = true
+    @AppStorage("ctl.longLock") private var longLockOn = true
+    @AppStorage("ctl.longRestore") private var longRestore = "prev"  // prev | one
+    @AppStorage("ctl.followRotation") private var followRotation = true
+    @AppStorage("ctl.rotateButton") private var rotateButton = true
+    @AppStorage("ctl.nextButton") private var nextButton = true
+    @AppStorage("ctl.seekButtons") private var seekButtons = true
+    @AppStorage("ctl.shotButton") private var shotButton = true
+    @AppStorage("ctl.btnSub") private var btnSub = true
+    @AppStorage("ctl.btnAudio") private var btnAudio = true
+    @AppStorage("ctl.btnSpeed") private var btnSpeed = true
+    @AppStorage("ctl.btnSkipMarks") private var btnMarks = true
+    @AppStorage("av.fill") private var fillMode = 0
+    @AppStorage("av.followVideo") private var followVideo = true
+    @State private var locked = false
+    @State private var longActive = false
+    @State private var longLocked = false
+    @State private var rateBeforeLong: Float = 1
+    @State private var longSpeed: Double = 2
+    @State private var levelHUD: String?
+    @State private var curFill = 0
+    @State private var screenSize: CGSize = .zero
+    @State private var didOrient = false
+    static var switching = false
+    let onNext: (PlayRequest) -> Void
 
-    init(request: PlayRequest) { _c = StateObject(wrappedValue: PlayerController(request)) }
+    init(request: PlayRequest, onNext: @escaping (PlayRequest) -> Void = { _ in }) {
+        _c = StateObject(wrappedValue: PlayerController(request))
+        self.onNext = onNext
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VideoSurface(view: c.videoView).ignoresSafeArea()
-            HStack(spacing: 0) {
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { guard doubleTapSeek else { toggleControls(); return }; c.skip(Int32(-seekStep)); flash("后退 \(seekStep) 秒") }
-                    .onTapGesture { toggleControls() }
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { guard doubleTapSeek else { toggleControls(); return }; c.skip(Int32(seekStep)); flash("快进 \(seekStep) 秒") }
-                    .onTapGesture { toggleControls() }
+            GeometryReader { g in
+                gestures.onAppear { screenSize = g.size }.onChange(of: g.size) { _, v in screenSize = v; c.engine.applyFill(curFill, screen: v) }
             }
             .ignoresSafeArea()
+            if let h = levelHUD {
+                Text(h).font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 10).glass(in: Capsule())
+                    .allowsHitTesting(false)
+            }
+            if longActive {
+                VStack {
+                    HStack(spacing: 6) {
+                        Image(systemName: longLocked ? "lock.fill" : "forward.fill")
+                        Text("\(longSpeed, specifier: "%g")× 快进\(longLocked ? "（已锁定，点按恢复）" : "")")
+                    }
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8).glass(in: Capsule())
+                    .padding(.top, 24)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
 
             if c.buffering && c.errorText == nil && !showControls {
                 ProgressView().controlSize(.large).tint(.white)
@@ -376,7 +525,32 @@ struct PlayerView: View {
                     Spacer()
                 }.allowsHitTesting(false).transition(.opacity)
             }
-            if showControls && trackSheet == nil { controls.transition(.opacity) }
+            if locked {
+                if showControls {
+                    HStack {
+                        Button { locked = false; scheduleHide() } label: { Image(systemName: "lock.fill").font(.title3).frame(width: 48, height: 48) }
+                            .glass(in: Circle(), interactive: true).foregroundStyle(.white)
+                            .padding(.leading, 24)
+                        Spacer()
+                    }
+                    .transition(.opacity)
+                }
+            } else if showControls && trackSheet == nil { controls.transition(.opacity) }
+            if let sk = c.activeSkip, !locked, trackSheet == nil {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button { c.skipActive() } label: {
+                            Label(sk.label, systemImage: "forward.end.fill").font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                        }
+                        .glass(in: Capsule(), interactive: true).foregroundStyle(.white)
+                    }
+                    .padding(.trailing, 28).padding(.bottom, showControls ? 96 : 40)
+                }
+                .transition(.opacity)
+            }
             if let k = trackSheet { trackPanel(k) }
             if let t = c.toast {
                 VStack {
@@ -394,10 +568,22 @@ struct PlayerView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
-        .task { await c.start(); scheduleHide() }
-        .onAppear { landscape = true; OrientationLock.set(.allButUpsideDown, force: .landscapeRight) }
-        .onDisappear { c.stop(); OrientationLock.set(.portrait, force: .portrait) }
-        .onChange(of: c.ended) { _, ended in if ended { close() } }
+        .task { c.onNext = { r in PlayerView.switching = true; onNext(r) }; await c.start(); scheduleHide() }
+        .onAppear {
+            curFill = fillMode
+            landscape = true
+            if !PlayerView.switching { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
+            PlayerView.switching = false
+        }
+        .onDisappear { c.stop(); if !PlayerView.switching { OrientationLock.set(.portrait, force: .portrait) } }
+        .onChange(of: c.ended) { _, ended in if ended && !PlayerView.switching { close() } }
+        .onChange(of: c.timeMs) { _, t in
+            guard !didOrient, t > 300 else { return }
+            didOrient = true
+            c.engine.applyFill(curFill, screen: screenSize)
+            let d = c.engine.videoDims
+            if followVideo, d.height > d.width * 1.05, d.width > 0 { landscape = false; setOrientation(portrait: true) }
+        }
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }
         .animation(.easeInOut(duration: 0.2), value: showControls)
         .animation(.spring(response: 0.35, dampingFraction: 0.9), value: trackSheet)
@@ -436,16 +622,25 @@ struct PlayerView: View {
                 HStack(spacing: 10) {
                     Button { close() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
                         .glass(in: Circle(), interactive: true)
+                    Button { locked = true; showControls = true; scheduleHide() } label: { Image(systemName: "lock.open").frame(width: 40, height: 40) }
+                        .glass(in: Circle(), interactive: true)
                     Text(c.title).font(.headline).lineLimit(1).foregroundStyle(.white)
                         .padding(.horizontal, 14).frame(height: 40)
                         .glass(in: Capsule())
                     Spacer()
-                    subtitleMenu
-                    audioMenu
-                    speedMenu
-                    Button { landscape.toggle(); setOrientation(portrait: !landscape) } label: {
-                        Image(systemName: "rotate.right").frame(width: 40, height: 40)
-                    }.glass(in: Circle(), interactive: true)
+                    if btnMarks { marksMenu }
+                    if btnSub { subtitleMenu }
+                    if btnAudio { audioMenu }
+                    if btnSpeed { speedMenu }
+                    if shotButton {
+                        Button { snapshot() } label: { Image(systemName: "camera").frame(width: 40, height: 40) }
+                            .glass(in: Circle(), interactive: true)
+                    }
+                    if rotateButton {
+                        Button { landscape.toggle(); setOrientation(portrait: !landscape) } label: {
+                            Image(systemName: "rotate.right").frame(width: 40, height: 40)
+                        }.glass(in: Circle(), interactive: true)
+                    }
                 }
             }
             .foregroundStyle(.white)
@@ -455,8 +650,10 @@ struct PlayerView: View {
 
             GlassGroup(spacing: 24) {
                 HStack(spacing: 28) {
-                    Button { c.skip(Int32(-seekStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("gobackward", seekStep)).font(.title2).frame(width: 60, height: 60) }
-                        .glass(in: Circle(), interactive: true)
+                    if seekButtons {
+                        Button { c.skip(Int32(-backStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("gobackward", backStep)).font(.title2).frame(width: 60, height: 60) }
+                            .glass(in: Circle(), interactive: true)
+                    }
                     Button { c.toggle(); scheduleHide() } label: {
                         Group {
                             if c.buffering && c.errorText == nil { ProgressView().controlSize(.large).tint(.white) }
@@ -465,8 +662,14 @@ struct PlayerView: View {
                         .frame(width: 84, height: 84)
                     }
                     .glass(in: Circle(), interactive: true)
-                    Button { c.skip(Int32(seekStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("goforward", seekStep)).font(.title2).frame(width: 60, height: 60) }
-                        .glass(in: Circle(), interactive: true)
+                    if seekButtons {
+                        Button { c.skip(Int32(fwdStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("goforward", fwdStep)).font(.title2).frame(width: 60, height: 60) }
+                            .glass(in: Circle(), interactive: true)
+                    }
+                    if nextButton, c.nextRequest != nil {
+                        Button { c.playNext() } label: { Image(systemName: "forward.end.fill").font(.title3).frame(width: 52, height: 52) }
+                            .glass(in: Circle(), interactive: true)
+                    }
                 }
             }
             .foregroundStyle(.white)
@@ -518,6 +721,93 @@ struct PlayerView: View {
     }
 
     private func toggleControls() { showControls.toggle(); if showControls { scheduleHide() } }
+
+    // MARK: gestures
+
+    private var gestures: some View {
+        GestureLayer(
+            onTap: {
+                if longLocked { endLong(force: true); return }
+                toggleControls()
+            },
+            onDoubleTap: { z in
+                if locked && !lockGestures { toggleControls(); return }
+                let act = z == .center ? (dtCenter == "play" ? "play" : "none") : dtSides
+                switch act {
+                case "play": c.toggle(); flash(c.isPlaying ? "播放" : "暂停")
+                case "seek":
+                    if z == .left { c.skip(Int32(-backStep)); flash("后退 \(backStep) 秒") }
+                    else if z == .right { c.skip(Int32(fwdStep)); flash("快进 \(fwdStep) 秒") }
+                    else { toggleControls() }
+                default: toggleControls()
+                }
+            },
+            onLongBegan: {
+                guard longPressOn, !(locked && !lockGestures), c.isPlaying else { return }
+                if longLocked { return }
+                rateBeforeLong = c.rate
+                longSpeed = longRate
+                c.setRate(Float(longSpeed))
+                longActive = true
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            },
+            onLongMoved: { d in
+                guard longActive, !longLocked else { return }
+                if longLockOn, d.height < -70 { longLocked = true; UIImpactFeedbackGenerator(style: .medium).impactOccurred(); return }
+                if longSlide {
+                    let steps = (d.width / 40).rounded()
+                    let v = min(4, max(1.25, longRate + Double(steps) * 0.25))
+                    if v != longSpeed { longSpeed = v; c.setRate(Float(v)) }
+                }
+            },
+            onLongEnded: { if !longLocked { endLong(force: false) } },
+            onPan: { began, left, dy, ended in
+                guard swipeLevels, !locked else { return }
+                if ended { DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { levelHUD = nil }; return }
+                if began { return }
+                if left {
+                    SystemLevels.brightness += dy
+                    levelHUD = "☀︎ 亮度 \(Int(SystemLevels.brightness * 100))%"
+                } else {
+                    SystemLevels.volume += Float(dy)
+                    levelHUD = "音量 \(Int(SystemLevels.volume * 100))%"
+                }
+            },
+            onPinch: { scale, ended in
+                guard pinchZoom, !locked, ended else { return }
+                if scale > 1.12 { curFill = 1; flash("填充屏幕") }
+                else if scale < 0.9 { curFill = 0; flash("适应屏幕") }
+                else { return }
+                c.engine.applyFill(curFill, screen: screenSize)
+            })
+    }
+
+    private func endLong(force: Bool) {
+        guard longActive else { return }
+        longActive = false; longLocked = false
+        c.setRate(longRestore == "one" ? 1 : rateBeforeLong)
+    }
+
+    private func snapshot() {
+        c.engine.saveSnapshot { ok in flash(ok ? "截图已保存到相册" : "截图失败") }
+    }
+
+    private var marksMenu: some View {
+        Menu {
+            Button { ManualSegments.setIntroEnd(c.segKey, c.timeMs); c.reloadSegments(); flash("已把当前位置设为片头结束") } label: {
+                Label("当前位置设为片头结束", systemImage: "forward.frame")
+            }
+            Button { ManualSegments.setCreditsFromEnd(c.segKey, max(0, c.lengthMs - c.timeMs)); c.reloadSegments(); flash("已把当前位置设为片尾开始") } label: {
+                Label("当前位置设为片尾开始", systemImage: "backward.frame")
+            }
+            Button(role: .destructive) { ManualSegments.clear(c.segKey); c.reloadSegments(); flash("已清除手动片头片尾") } label: {
+                Label("清除手动片头片尾", systemImage: "xmark.circle")
+            }
+        } label: {
+            Image(systemName: "forward.end.alt").frame(width: 40, height: 40)
+        }
+        .glass(in: Circle(), interactive: true)
+    }
     static func seekIcon(_ base: String, _ s: Int) -> String {
         [5, 10, 15, 30, 45, 60].contains(s) ? "\(base).\(s)" : base
     }
@@ -526,14 +816,15 @@ struct PlayerView: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(max(1, hideAfter) * 1_000_000_000))
-            if !Task.isCancelled, c.isPlaying, !scrubbing, trackSheet == nil, !showOnline { showControls = false }
+            if !Task.isCancelled, c.isPlaying || locked, !scrubbing, trackSheet == nil, !showOnline { showControls = false }
         }
     }
     private func flash(_ s: String) { c.toast = s }
     private func close() { c.stop(); OrientationLock.leavePlayer { dismiss() } }
 
     private func setOrientation(portrait: Bool) {
-        OrientationLock.set(.allButUpsideDown, force: portrait ? .portrait : .landscapeRight)
+        let allowed: UIInterfaceOrientationMask = followRotation ? .allButUpsideDown : (portrait ? .portrait : .landscape)
+        OrientationLock.set(allowed, force: portrait ? .portrait : .landscapeRight)
     }
 }
 
@@ -603,14 +894,17 @@ struct TrackSheet: View {
                             Button("延后 0.5 秒") { c.shiftSubDelay(500) }.buttonStyle(.bordered)
                         }
                     }
+                    if UserDefaults.standard.object(forKey: "ai.enabled") as? Bool ?? true {
                     Section("AI 与翻译") {
                         Button { Task { await c.toggleAICaptions() } } label: {
                             Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
                         }
                         ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
-                            Button { Task { await c.aiTranslateSub(s.url, name: s.name) } } label: {
-                                Label("AI 翻译：\(s.name)", systemImage: "sparkles").lineLimit(1)
-                            }.disabled(c.translating)
+                            if UserDefaults.standard.object(forKey: "aitr.enabled") as? Bool ?? true {
+                                Button { Task { await c.aiTranslateSub(s.url, name: s.name) } } label: {
+                                    Label("AI 翻译：\(s.name)", systemImage: "sparkles").lineLimit(1)
+                                }.disabled(c.translating)
+                            }
                             Button { Task { await c.translateSub(s.url, name: s.name) } } label: {
                                 Label("系统翻译：\(s.name)", systemImage: "translate").lineLimit(1)
                             }.disabled(c.translating)
@@ -622,6 +916,7 @@ struct TrackSheet: View {
                         Button { showAISettings = true } label: {
                             Label("AI 翻译设置（\(AITranslateConfig.shared.provider.title)）", systemImage: "key")
                         }
+                    }
                     }
                     SubtitleStyleEditor()
                     Section {

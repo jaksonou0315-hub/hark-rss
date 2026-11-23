@@ -408,6 +408,15 @@ final class MPVEngine: MediaEngine {
         applySubtitleStyle()
     }
 
+    func screenshot(to path: String) { core.commandAsync(["screenshot-to-file", path, "video"]) }
+    func setFill(_ mode: Int) {
+        core.set("keepaspect", mode == 2 ? "no" : "yes")
+        core.set("panscan", mode == 1 ? "1.0" : "0.0")
+    }
+    var videoDims: CGSize {
+        CGSize(width: Double(core.int("video-params/w") ?? 0), height: Double(core.int("video-params/h") ?? 0))
+    }
+
     func open(_ p: PlayableMedia) {
         var hdrs: [String] = []
         for (k, v) in p.headers {

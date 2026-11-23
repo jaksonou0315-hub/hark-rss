@@ -364,7 +364,11 @@ final class EmbyProvider: SourceProvider {
 
     func playable(_ file: RemoteFile) async throws -> PlayableMedia {
         if source.token.isEmpty { source = try await EmbyProvider.login(source); await SourceStore.shared.updateCredentials(source) }
-        guard let url = URL(string: "\(base)/Videos/\(file.id)/stream?static=true&MediaSourceId=\(file.id)&api_key=\(source.token)&DeviceId=\(Self.deviceId)") else { throw AppError.message("地址无效") }
+        let q = UserDefaults.standard.integer(forKey: "av.serverQuality")   // 0 = 原画, else Mbps
+        let u = q > 0
+            ? "\(base)/Videos/\(file.id)/master.m3u8?MediaSourceId=\(file.id)&api_key=\(source.token)&DeviceId=\(Self.deviceId)&PlaySessionId=\(UUID().uuidString)&VideoCodec=h264&AudioCodec=aac&TranscodingMaxAudioChannels=2&MaxStreamingBitrate=\(q * 1_000_000)&VideoBitrate=\(q * 1_000_000 - 192_000)&AudioBitrate=192000&SegmentContainer=ts"
+            : "\(base)/Videos/\(file.id)/stream?static=true&MediaSourceId=\(file.id)&api_key=\(source.token)&DeviceId=\(Self.deviceId)"
+        guard let url = URL(string: u) else { throw AppError.message("地址无效") }
         var p = PlayableMedia(url: url, title: file.name, resumeKey: resumeKey(file))
         // external subtitle streams known to the server
         if let item = try? await get("/Users/\(source.userId)/Items/\(file.id)"),
