@@ -17,10 +17,7 @@ final class PlaybackRouter: ObservableObject {
         if phone { UIView.setAnimationsEnabled(false) }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { request = r }
-        if phone {
-            OrientationLock.set(.allButUpsideDown, force: .landscapeRight)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { UIView.setAnimationsEnabled(true) }
-        }
+        if phone { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { UIView.setAnimationsEnabled(true) } }
     }
 }
 
