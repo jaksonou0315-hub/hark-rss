@@ -91,6 +91,7 @@ struct DetailView: View {
                                 overview(item)
                                 if item.isTV { episodes(item)
                                     episodeInfo(item) } else if item.files.count > 1 { versions(item) }
+                                if let f = firstPlayable(item) { MediaInfoCards(file: f) }
                                 cast
                                 genres
                                 recent(item)
