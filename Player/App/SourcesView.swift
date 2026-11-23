@@ -128,6 +128,7 @@ struct FolderView: View {
                                     if let y = f.year { Text(String(y)).font(.caption2).foregroundStyle(.secondary) }
                                 }
                             }
+                            .overlay(alignment: .topTrailing) { if f.isDir { starButton(f, grid: true) } }
                         }
                     }
                     .padding()
@@ -157,6 +158,8 @@ struct FolderView: View {
                                 if opening == f.id { Spacer(); ProgressView() }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .trailing) { if f.isDir { starButton(f, grid: false) } }
                         .listRowBackground(Color.clear)
                     }
                 }
@@ -202,6 +205,25 @@ struct FolderView: View {
             }
             pushDir = f
         }
+    }
+
+    /// Always-visible star on folder rows/tiles: one tap to 收藏 / 取消收藏.
+    private func starButton(_ f: RemoteFile, grid: Bool) -> some View {
+        let on = favs.contains(target.source, f)
+        return Button {
+            favs.toggle(target.source, f)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            toast = favs.contains(target.source, f) ? "已收藏，会显示在「文件源」" : "已取消收藏"
+        } label: {
+            Image(systemName: on ? "star.fill" : "star")
+                .font(grid ? .subheadline.weight(.semibold) : .body)
+                .foregroundStyle(on ? Color.yellow : (grid ? Color.white : Color.secondary))
+                .frame(width: 44, height: 44)
+                .background { if grid { Circle().fill(.black.opacity(0.35)).frame(width: 30, height: 30) } }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(on ? "取消收藏" : "收藏")
     }
 
     private func favButton(_ f: RemoteFile) -> some View {
