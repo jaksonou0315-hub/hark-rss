@@ -233,7 +233,17 @@ struct FolderView: View {
             let src = currentSource
             Task { await library.rescanDir(source: src, dir: f); toast = "已重新扫描 \(f.name)" }
         } label: { Label("重新扫描", systemImage: "arrow.clockwise") }
-        Button { editMatch(f) } label: { Label("编辑匹配", systemImage: "square.and.pencil") }
+        if isVideoFolder(f) {
+            Button { editMatch(f) } label: { Label("编辑匹配", systemImage: "square.and.pencil") }
+        }
+    }
+    /// A film / show's own folder: it holds video files itself (not just sub-folders).
+    private func isVideoFolder(_ f: RemoteFile) -> Bool {
+        if smartMap[f.id] != nil { return true }
+        guard let snap = ScanCenter.shared.db(currentSource.id)[SnapshotDB.key(f)] else { return false }
+        return snap.children.contains { c in
+            c.isVideo || (c.isDir && c.name.range(of: #"^(season|s\d|第.{1,4}[季部]|specials?)"#, options: [.regularExpression, .caseInsensitive]) != nil)
+        }
     }
     private func editMatch(_ f: RemoteFile) {
         let xs = library.items(under: currentSource, dir: f)

@@ -107,12 +107,6 @@ struct FavoriteSourcesView: View {
                                         toast = "正在重新扫描 \(f.title)…"
                                         Task { await library.rescanDir(source: s, dir: f.dir); toast = "已重新扫描 \(f.title)" }
                                     } label: { Label("重新扫描", systemImage: "arrow.clockwise") }
-                                    Button {
-                                        let xs = library.items(under: s, dir: f.dir)
-                                        if xs.count == 1 { editItem = xs[0] }
-                                        else if xs.isEmpty { toast = "这个文件夹里还没有扫进媒体库的影片" }
-                                        else { pickList = xs; showPick = true }
-                                    } label: { Label("编辑匹配", systemImage: "square.and.pencil") }
                                     Button(role: .destructive) { favs.remove(f); toast = "已取消收藏，并从媒体库移除" } label: { Label("取消收藏", systemImage: "star.slash") }
                                 }
                             }
