@@ -108,6 +108,8 @@ struct DetailView: View {
                         if atTop != barsVisible { withAnimation(.easeInOut(duration: 0.2)) { barsVisible = atTop } }
                     }
                     topBar(item)
+                        .padding(.top, Self.windowTopInset)
+                        .ignoresSafeArea(edges: .top)
                         .opacity(barsVisible ? 1 : 0)
                         .offset(y: barsVisible ? 0 : -20)
                         .allowsHitTesting(barsVisible)
@@ -608,7 +610,7 @@ struct DetailView: View {
     private func topBar(_ item: LibraryItem) -> some View {
         HStack {
             Button { dismiss() } label: {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 52, height: 52)
+                Image(systemName: "chevron.left").font(.body.weight(.semibold)).frame(width: 44, height: 44)
             }
             .glass(in: Circle(), interactive: true)
             Spacer()
@@ -636,13 +638,19 @@ struct DetailView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis").font(.title3.weight(.semibold)).frame(width: 52, height: 52)
+                Image(systemName: "ellipsis").font(.body.weight(.semibold)).frame(width: 44, height: 44)
             }
             .glass(in: Circle(), interactive: true)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.top, 4)
+        .padding(.horizontal, 16)
+        .padding(.top, 2)
+    }
+
+    /// Real status-bar inset of the window (ignores any hidden nav bar space).
+    private static var windowTopInset: CGFloat {
+        let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return w?.safeAreaInsets.top ?? 47
     }
 
     // MARK: menu helpers
