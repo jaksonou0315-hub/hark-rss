@@ -896,7 +896,8 @@ struct ItemGridView: View {
     var groupCollections = false
     var sortByYear = false
     @EnvironmentObject var library: LibraryStore
-    @State private var sort = 0
+    @AppStorage("grid.sort") private var sort = 0          // 0 添加时间 1 名称 2 评分 3 年份 (shared by every category)
+    @AppStorage("grid.sortAsc") private var asc = false
     @State private var blTab: Groupings.BLSub? = nil
     @State private var regionTab: String? = nil
     @State private var tick = 0
@@ -917,11 +918,13 @@ struct ItemGridView: View {
                 xs = base.filter { set.contains(Groupings.region($0)) }
             } else { xs = base }
         }
+        if sortByYear && sort == 0 { return xs.sorted { ($0.year ?? 9999, $0.title) < ($1.year ?? 9999, $1.title) } }
+        let a = asc
         switch sort {
-        case 1: return xs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        case 2: return xs.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
-        case 3: return xs.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-        default: return sortByYear ? xs.sorted { ($0.year ?? 9999, $0.title) < ($1.year ?? 9999, $1.title) } : xs
+        case 1: return xs.sorted { let r = $0.title.localizedStandardCompare($1.title); return a ? r == .orderedAscending : r == .orderedDescending }
+        case 2: return xs.sorted { a ? ($0.rating ?? 0, $0.title) < ($1.rating ?? 0, $1.title) : ($0.rating ?? 0, $1.title) > ($1.rating ?? 0, $0.title) }
+        case 3: return xs.sorted { a ? ($0.year ?? 9999, $0.title) < ($1.year ?? 9999, $1.title) : ($0.year ?? 0, $1.title) > ($1.year ?? 0, $0.title) }
+        default: return xs.sorted { a ? $0.added < $1.added : $0.added > $1.added }
         }
     }
 
@@ -1014,16 +1017,31 @@ struct ItemGridView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Picker("排序", selection: $sort) {
-                            Text("默认").tag(0); Text("名称").tag(1); Text("评分").tag(2); Text("年份").tag(3)
-                        }
+                        sortButton(0, "添加时间", "最早在前", "最新在前")
+                        sortButton(1, "名称", "A→Z", "Z→A")
+                        sortButton(2, "评分", "低→高", "高→低")
+                        sortButton(3, "年份", "从旧到新", "从新到旧")
                     } label: { Image(systemName: "arrow.up.arrow.down") }
+                    .menuActionDismissBehavior(.disabled)
                 }
             }
         }
         .navigationBarBackButtonHidden(selecting)
         .foregroundStyle(.white)
         .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in tick += 1 }
+    }
+
+    /// Tap a sort once = ascending (年份 从旧到新); tap it again = descending, and so on.
+    private func sortButton(_ tag: Int, _ name: String, _ up: String, _ down: String) -> some View {
+        Button {
+            if sort == tag { asc.toggle() } else { sort = tag; asc = true }
+        } label: {
+            if sort == tag {
+                Label("\(name)（\(asc ? up : down)）", systemImage: asc ? "arrow.up" : "arrow.down")
+            } else {
+                Text(name)
+            }
+        }
     }
 
     private var blTabs: some View {
