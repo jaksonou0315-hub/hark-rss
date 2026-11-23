@@ -89,8 +89,7 @@ struct DetailView: View {
                             VStack(alignment: .leading, spacing: 26) {
                                 actionRow(item)
                                 overview(item)
-                                if item.isTV { episodes(item)
-                                    episodeInfo(item) } else if item.files.count > 1 { versions(item) }
+                                if item.isTV { episodes(item) } else if item.files.count > 1 { versions(item) }
                                 if let f = firstPlayable(item) { MediaInfoCards(file: f) }
                                 cast
                                 genres
