@@ -12,6 +12,7 @@ struct HarkPlayerApp: App {
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 800 << 20)
         _ = AppActivity.shared
         MPVGuard.checkLastRun()
+        Task { @MainActor in KeyboardIdle.shared.start() }
     }
 
     var body: some Scene {

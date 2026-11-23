@@ -1198,6 +1198,7 @@ struct LibrarySearchView: View {
                         .padding(16)
                     }
                 }
+                .scrollDismissesKeyboard(.immediately)
             }
             .navigationTitle("搜索")
             .searchable(text: $q, prompt: "影片、剧集、类型、文件名")

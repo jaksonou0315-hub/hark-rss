@@ -329,6 +329,7 @@ struct FavoriteFilesSearchView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .scrollDismissesKeyboard(.immediately)
             }
             .navigationTitle("搜索收藏")
             .navigationDestination(for: BrowseTarget.self) { FolderView(target: $0) }
