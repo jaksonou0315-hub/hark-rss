@@ -101,7 +101,28 @@ final class LibraryStore: ObservableObject {
         }
     }
     /// Encode + write off the main thread (library.json can be several MB).
+    /// Same show split across folders (e.g. one folder per season) → one item per TMDB id.
+    private func mergeDuplicateShows() {
+        var first: [Int: Int] = [:]
+        var drop = IndexSet()
+        var merged = items
+        for (i, it) in merged.enumerated() where it.isTV {
+            guard let t = it.tmdbId else { continue }
+            if let k = first[t] {
+                let have = Set(merged[k].files.map(\.id))
+                merged[k].files += it.files.filter { !have.contains($0.id) }
+                merged[k].added = max(merged[k].added, it.added)
+                drop.insert(i)
+            } else { first[t] = i }
+        }
+        guard !drop.isEmpty else { return }
+        merged.remove(atOffsets: drop)
+        items = merged
+        Groupings.invalidateCaches()
+    }
+
     private func save() {
+        mergeDuplicateShows()
         let snap = Snapshot(folders: folders, items: items)
         let url = fileURL
         Self.ioQueue.async {
