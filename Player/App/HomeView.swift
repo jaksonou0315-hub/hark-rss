@@ -113,7 +113,7 @@ enum Groupings {
     /// BL 子分类：电影 / 电视剧 / 短剧 / 动画 / 综艺
     // MARK: region sub-tabs
 
-    enum Region { case cn, hk, tw, jp, kr, west, sea, other }
+    enum Region { case cn, hk, tw, jp, kr, th, west, sea, other }
     private static let westCodes: Set<String> = ["US", "GB", "CA", "AU", "NZ", "IE", "FR", "DE", "IT", "ES", "PT", "NL", "BE", "LU", "CH", "AT",
         "SE", "NO", "DK", "FI", "IS", "PL", "CZ", "SK", "HU", "RO", "BG", "GR", "HR", "SI", "RS", "UA", "RU", "EE", "LV", "LT", "MT", "CY", "BY"]
     private static let seaCodes: Set<String> = ["TH", "VN", "PH", "MY", "SG", "ID", "MM", "KH", "LA", "BN", "TL"]
@@ -124,6 +124,7 @@ enum Groupings {
         case "TW": return .tw
         case "JP": return .jp
         case "KR": return .kr
+        case "TH": return .th
         default: return westCodes.contains(c) ? .west : seaCodes.contains(c) ? .sea : nil
         }
     }
@@ -135,25 +136,28 @@ enum Groupings {
         case "ja": return .jp
         case "ko": return .kr
         case "en", "fr", "de", "it", "es", "pt", "nl", "sv", "no", "da", "fi", "pl", "ru": return .west
-        case "th", "vi", "id", "ms", "tl": return .sea
+        case "th": return .th
+        case "vi", "id", "ms", "tl": return .sea
         default: return .other
         }
     }
     /// Sub-tabs for a category grid, by its title.
     static func regionTabs(_ title: String) -> [(String, Set<Region>)]? {
         switch title {
-        case "电影", "动画电影":
-            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("其他", [.sea, .other])]
+        case "电影":
+            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("泰国电影", [.th]), ("其他", [.sea, .other])]
+        case "动画电影":
+            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("其他", [.th, .sea, .other])]
         case "电视剧":
             return [("大陆剧", [.cn]), ("港剧", [.hk]), ("台剧", [.tw]), ("韩剧", [.kr]), ("日剧", [.jp]),
-                    ("欧美剧", [.west]), ("东南亚剧", [.sea]), ("其他", [.other])]
+                    ("欧美剧", [.west]), ("东南亚剧", [.th, .sea]), ("其他", [.other])]
         case "动画":
-            return [("华语动漫", [.cn, .hk, .tw]), ("日韩动漫", [.jp, .kr]), ("欧美动漫", [.west]), ("其他动漫", [.sea, .other])]
+            return [("华语动漫", [.cn, .hk, .tw]), ("日韩动漫", [.jp, .kr]), ("欧美动漫", [.west]), ("其他动漫", [.th, .sea, .other])]
         case "综艺":
             return [("大陆综艺", [.cn]), ("港台综艺", [.hk, .tw]), ("韩国综艺", [.kr]), ("日本综艺", [.jp]),
-                    ("欧美综艺", [.west]), ("东南亚综艺", [.sea]), ("其他综艺", [.other])]
+                    ("欧美综艺", [.west]), ("东南亚综艺", [.th, .sea]), ("其他综艺", [.other])]
         case "纪录片":
-            return [("华语纪录片", [.cn, .hk, .tw]), ("日韩纪录片", [.jp, .kr]), ("欧美纪录片", [.west]), ("其他纪录片", [.sea, .other])]
+            return [("华语纪录片", [.cn, .hk, .tw]), ("日韩纪录片", [.jp, .kr]), ("欧美纪录片", [.west]), ("其他纪录片", [.th, .sea, .other])]
         default: return nil
         }
     }
