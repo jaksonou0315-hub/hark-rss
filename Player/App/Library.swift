@@ -43,6 +43,7 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var dbId: String? = nil           // Douban subject id ("" = looked up, not found)
     var dbRating: Double? = nil
     var dbIntro: String? = nil
+    var dbGenres: [String]? = nil     // Douban genres (「同性」 marks BL); nil = not looked up yet
     var files: [LibraryFile]
     var added = Date()
 
@@ -238,10 +239,11 @@ final class LibraryStore: ObservableObject {
     /// 豆瓣 source: look up each matched film's Douban score and synopsis, one at a time with a pause
     /// (Douban throttles bursts). A network failure leaves the film for the next pass.
     func enrichDouban() async {
-        guard MetaSource.douban, !doubanRunning else { return }
+        // runs for every source: Douban's 「同性」 genre is what files Thai / Chinese BL under BL
+        guard !doubanRunning else { return }
         doubanRunning = true
         defer { doubanRunning = false }
-        let todo = items.filter { $0.dbId == nil && $0.tmdbId != nil }
+        let todo = items.filter { $0.dbGenres == nil && $0.tmdbId != nil }
         var pending: [String: DoubanInfo] = [:]
         var lastFlush = Date()
         func flush() {
@@ -249,15 +251,16 @@ final class LibraryStore: ObservableObject {
             var xs = items
             for i in xs.indices {
                 guard let d = pending[xs[i].id] else { continue }
-                xs[i].dbId = d.id; xs[i].dbRating = d.rating; xs[i].dbIntro = d.intro
+                xs[i].dbId = d.id; xs[i].dbRating = d.rating; xs[i].dbIntro = d.intro; xs[i].dbGenres = d.genres
             }
             pending = [:]; lastFlush = Date()
             items = xs
             save()
+            Groupings.invalidateCaches()
+            NotificationCenter.default.post(name: .categoryChanged, object: nil)
         }
         var fails = 0
         for it in todo {
-            guard MetaSource.douban else { break }
             await AppActivity.shared.waitUntilActive()
             switch await Douban.lookup(title: it.title, alt: it.originalTitle, year: it.year, tv: it.isTV) {
             case .found(let d): pending[it.id] = d; fails = 0
@@ -448,7 +451,7 @@ final class LibraryStore: ObservableObject {
                     item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries; item.keywords = prev.keywords
                     item.collectionId = prev.collectionId; item.collectionName = prev.collectionName; item.collectionPoster = prev.collectionPoster
                     item.regions = prev.regions; item.lang = prev.lang
-                    item.dbId = prev.dbId; item.dbRating = prev.dbRating; item.dbIntro = prev.dbIntro
+                    item.dbId = prev.dbId; item.dbRating = prev.dbRating; item.dbIntro = prev.dbIntro; item.dbGenres = prev.dbGenres
                     for i in item.files.indices {
                         if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                             item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
@@ -501,7 +504,7 @@ final class LibraryStore: ObservableObject {
             it.genres = gs.isEmpty ? nil : gs
             it.certification = nil; it.countries = nil; it.keywords = nil
             it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
-            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil
+            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil; it.dbGenres = nil
             for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
         } else {
             let first = it.files.first
@@ -510,7 +513,7 @@ final class LibraryStore: ObservableObject {
             it.overview = first?.file.overview; it.poster = first?.file.posterURL; it.backdrop = nil
             it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil; it.keywords = nil
             it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
-            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil
+            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil; it.dbGenres = nil
         }
         items[j] = it
         save()

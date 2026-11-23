@@ -199,7 +199,7 @@ enum Groupings {
 
     static func autoCategory(_ i: LibraryItem, ignoreBL: Bool = false) -> Category {
         // Regex-heavy, so memoise per item; the signature changes whenever the inputs do.
-        let sig = "\(ignoreBL)|\(i.title)|\(i.originalTitle ?? "")|\(i.tmdbId ?? 0)|\(i.kind)|\(i.keywords?.count ?? -1)|\(i.genres?.joined() ?? "")|\(i.files.count)|\(i.files.first?.id ?? "")"
+        let sig = "\(ignoreBL)|\(i.title)|\(i.originalTitle ?? "")|\(i.tmdbId ?? 0)|\(i.kind)|\(i.keywords?.count ?? -1)|\(i.genres?.joined() ?? "")|\(i.files.count)|\(i.files.first?.id ?? "")|\(i.dbGenres?.joined() ?? "-")"
         let key = (ignoreBL ? "b:" : "a:") + i.id
         memoLock.lock(); let hit = autoMemo[key]; memoLock.unlock()
         if let hit, hit.0 == sig { return hit.1 }
@@ -229,6 +229,7 @@ enum Groupings {
     private static let blKeywords: Set<String> = [
         "boys' love", "boys love", "boy's love", "boys' love (bl)", "bl", "bl drama", "bl series", "bl manga", "bl anime",
         "yaoi", "shounen ai", "shounen-ai", "shōnen-ai", "danmei", "gay romance", "gay love", "gay couple",
+        "gay relationship", "gay lead character", "gay theme", "gay kiss", "male homosexuality", "homosexual relationship",
     ]
     private static let blRegex = try! NSRegularExpression(pattern: "(^|[^A-Za-z])BL([^A-Za-z]|$)|耽美|boys'? ?love|yaoi|腐剧", options: [.caseInsensitive])
     private static let concertKeywords: Set<String> = ["concert", "concert film", "live concert", "concert tour", "live performance", "music concert"]
@@ -248,7 +249,13 @@ enum Groupings {
         return false
     }
     private static func autoBL(_ i: LibraryItem) -> Bool {
-        if (i.keywords ?? []).contains(where: { blKeywords.contains($0) || $0.contains("boys' love") || $0.contains("yaoi") }) { return true }
+        let kw = i.keywords ?? []
+        if kw.contains(where: { blKeywords.contains($0) || $0.contains("boys' love") || $0.contains("boys’ love") || $0.contains("yaoi") }) { return true }
+        // Douban genre 「同性」, unless TMDB says it's only girls' love
+        if i.dbGenres?.contains("同性") == true {
+            let gl = kw.contains { $0.contains("girls' love") || $0 == "lesbian" || $0 == "lesbian relationship" || $0.contains("yuri") }
+            if !gl { return true }
+        }
         // file / folder names (path-based drives keep folder names in the path)
         for f in i.files.prefix(3) {
             let s = f.file.path.contains("/") ? f.file.path : f.file.name

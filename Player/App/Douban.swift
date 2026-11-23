@@ -7,7 +7,7 @@ enum MetaSource {
     static var douban: Bool { UserDefaults.standard.string(forKey: key) == "douban" }
 }
 
-struct DoubanInfo { var id: String; var rating: Double?; var intro: String? }
+struct DoubanInfo { var id: String; var rating: Double?; var intro: String?; var genres: [String] = [] }
 
 enum Douban {
     enum Result { case found(DoubanInfo), notFound, failed }
@@ -41,7 +41,8 @@ enum Douban {
             var rating: Double?
             if let r = j["rating"] as? [String: Any] { rating = (r["value"] as? NSNumber)?.doubleValue }
             let intro = (j["intro"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .found(DoubanInfo(id: id, rating: (rating ?? 0) > 0 ? rating : nil, intro: intro?.isEmpty == false ? intro : nil))
+            let genres = (j["genres"] as? [String]) ?? []
+            return .found(DoubanInfo(id: id, rating: (rating ?? 0) > 0 ? rating : nil, intro: intro?.isEmpty == false ? intro : nil, genres: genres))
         }
         return .found(DoubanInfo(id: id, rating: nil, intro: nil))
     }

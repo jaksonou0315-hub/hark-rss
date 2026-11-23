@@ -39,7 +39,7 @@ struct SettingsView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } header: { Text("刮削源") } footer: {
-                    Text("选豆瓣时，海报、分类和剧集仍来自 TMDB，评分和简介换成豆瓣的（找不到时沿用 TMDB）。豆瓣资料会在后台逐部补全。")
+                    Text("选豆瓣时，海报、分类和剧集仍来自 TMDB，评分和简介换成豆瓣的（找不到时沿用 TMDB）。后台会逐部查豆瓣资料，豆瓣类型含「同性」的会归到 BL。")
                 }
 
                 Section {
