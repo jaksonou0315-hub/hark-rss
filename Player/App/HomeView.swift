@@ -89,6 +89,53 @@ enum Groupings {
         NotificationCenter.default.post(name: .categoryChanged, object: nil)
     }
     /// BL 子分类：电影 / 电视剧 / 短剧 / 动画 / 综艺
+    // MARK: region sub-tabs
+
+    enum Region { case cn, hk, tw, jp, kr, west, sea, other }
+    private static let westCodes: Set<String> = ["US", "GB", "CA", "AU", "NZ", "IE", "FR", "DE", "IT", "ES", "PT", "NL", "BE", "LU", "CH", "AT",
+        "SE", "NO", "DK", "FI", "IS", "PL", "CZ", "SK", "HU", "RO", "BG", "GR", "HR", "SI", "RS", "UA", "RU", "EE", "LV", "LT", "MT", "CY", "BY"]
+    private static let seaCodes: Set<String> = ["TH", "VN", "PH", "MY", "SG", "ID", "MM", "KH", "LA", "BN", "TL"]
+    private static func region(code c: String) -> Region? {
+        switch c {
+        case "CN": return .cn
+        case "HK", "MO": return .hk
+        case "TW": return .tw
+        case "JP": return .jp
+        case "KR": return .kr
+        default: return westCodes.contains(c) ? .west : seaCodes.contains(c) ? .sea : nil
+        }
+    }
+    static func region(_ i: LibraryItem) -> Region {
+        if let c = i.regions?.first { return region(code: c) ?? .other }
+        switch i.lang ?? "" {
+        case "zh", "cn": return .cn
+        case "yue": return .hk
+        case "ja": return .jp
+        case "ko": return .kr
+        case "en", "fr", "de", "it", "es", "pt", "nl", "sv", "no", "da", "fi", "pl", "ru": return .west
+        case "th", "vi", "id", "ms", "tl": return .sea
+        default: return .other
+        }
+    }
+    /// Sub-tabs for a category grid, by its title.
+    static func regionTabs(_ title: String) -> [(String, Set<Region>)]? {
+        switch title {
+        case "电影", "动画电影":
+            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("其他", [.sea, .other])]
+        case "电视剧":
+            return [("大陆剧", [.cn]), ("港剧", [.hk]), ("台剧", [.tw]), ("韩剧", [.kr]), ("日剧", [.jp]),
+                    ("欧美剧", [.west]), ("东南亚剧", [.sea]), ("其他", [.other])]
+        case "动画":
+            return [("华语动漫", [.cn, .hk, .tw]), ("日韩动漫", [.jp, .kr]), ("欧美动漫", [.west]), ("其他动漫", [.sea, .other])]
+        case "综艺":
+            return [("大陆综艺", [.cn]), ("港台综艺", [.hk, .tw]), ("韩国综艺", [.kr]), ("日本综艺", [.jp]),
+                    ("欧美综艺", [.west]), ("东南亚综艺", [.sea]), ("其他综艺", [.other])]
+        case "纪录片":
+            return [("华语纪录片", [.cn, .hk, .tw]), ("日韩纪录片", [.jp, .kr]), ("欧美纪录片", [.west]), ("其他纪录片", [.sea, .other])]
+        default: return nil
+        }
+    }
+
     enum BLSub: String, CaseIterable {
         case movie, tv, short, anime, variety
         var name: String {
@@ -818,6 +865,7 @@ struct ItemGridView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var sort = 0
     @State private var blTab: Groupings.BLSub? = nil
+    @State private var regionTab: String? = nil
     @State private var tick = 0
     @State private var selecting = false
     @State private var selected = Set<String>()
@@ -831,7 +879,10 @@ struct ItemGridView: View {
             xs = blTab.map { t in all.filter { Groupings.blSub($0) == t } } ?? all
         } else {
             let byId = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            xs = ids.compactMap { byId[$0] }
+            let base = ids.compactMap { byId[$0] }
+            if let t = regionTab, let set = Groupings.regionTabs(title)?.first(where: { $0.0 == t })?.1 {
+                xs = base.filter { set.contains(Groupings.region($0)) }
+            } else { xs = base }
         }
         switch sort {
         case 1: return xs.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
@@ -869,7 +920,7 @@ struct ItemGridView: View {
         ZStack(alignment: .bottom) {
             HomeStyle.bg.ignoresSafeArea()
             ScrollView {
-                if bl { blTabs }
+                if bl { blTabs } else if Groupings.regionTabs(title) != nil { regionTabs }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 12)], spacing: 18) {
                     ForEach(entries) { e in
                       switch e {
@@ -954,6 +1005,28 @@ struct ItemGridView: View {
                             .padding(.horizontal, 14).frame(height: 36)
                             .foregroundStyle(blTab == t.0 ? Color.black : Color.white)
                             .background(blTab == t.0 ? Color.white : HomeStyle.card, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 10)
+        }
+    }
+
+    private var regionTabs: some View {
+        let byId = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let base = ids.compactMap { byId[$0] }
+        let regs = base.map(Groupings.region)
+        let defs = Groupings.regionTabs(title) ?? []
+        let tabs: [(String?, String, Int)] = [(nil, "全部", base.count)] + defs.map { d in (d.0, d.0, regs.filter { d.1.contains($0) }.count) }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tabs, id: \.1) { t in
+                    Button { withAnimation(.easeInOut(duration: 0.2)) { regionTab = t.0; selected = [] } } label: {
+                        Text("\(t.1) \(t.2)").font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14).frame(height: 36)
+                            .foregroundStyle(regionTab == t.0 ? Color.black : Color.white)
+                            .background(regionTab == t.0 ? Color.white : HomeStyle.card, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

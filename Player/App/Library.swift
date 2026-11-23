@@ -38,6 +38,8 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var collectionId: Int? = nil      // TMDB belongs_to_collection (movies), groups a series in the 电影 grid
     var collectionName: String? = nil
     var collectionPoster: URL? = nil
+    var regions: [String]? = nil      // ISO country codes, origin first (region sub-tabs)
+    var lang: String? = nil           // TMDB original_language
     var files: [LibraryFile]
     var added = Date()
 
@@ -175,7 +177,7 @@ final class LibraryStore: ObservableObject {
         let srcs = SourceStore.shared.sources
         let prefetchOff = Set(srcs.filter { $0.extra["prefetch"] == "0" }.map(\.id))
         let todo = items.filter { it in
-            it.tmdbId != nil && (it.certification == nil || it.genres == nil || it.keywords == nil || !(it.keywords ?? []).contains(it.isTV ? "#v2" : "#v3"))
+            it.tmdbId != nil && (it.certification == nil || it.genres == nil || it.keywords == nil || !(it.keywords ?? []).contains("#v4"))
                 && !(it.files.allSatisfy { prefetchOff.contains($0.sourceId) })
         }
         var changed = 0
@@ -188,6 +190,7 @@ final class LibraryStore: ObservableObject {
             items[i].countries = d.countries
             items[i].keywords = d.keywords
             items[i].collectionId = d.collectionId; items[i].collectionName = d.collectionName; items[i].collectionPoster = d.collectionPoster
+            items[i].regions = d.regionCodes; items[i].lang = d.lang
             changed += 1
             if changed % 20 == 0 { save() }
         }
@@ -369,6 +372,7 @@ final class LibraryStore: ObservableObject {
                     item.kind = prev.kind
                     item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries; item.keywords = prev.keywords
                     item.collectionId = prev.collectionId; item.collectionName = prev.collectionName; item.collectionPoster = prev.collectionPoster
+                    item.regions = prev.regions; item.lang = prev.lang
                     for i in item.files.indices {
                         if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                             item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
@@ -420,7 +424,7 @@ final class LibraryStore: ObservableObject {
             let gs = m.genreIds.compactMap { TMDB.genreName($0) }
             it.genres = gs.isEmpty ? nil : gs
             it.certification = nil; it.countries = nil; it.keywords = nil
-            it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil
+            it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
             for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
         } else {
             let first = it.files.first
@@ -428,7 +432,7 @@ final class LibraryStore: ObservableObject {
             it.title = p?.title ?? it.title; it.year = p?.year; it.originalTitle = nil
             it.overview = first?.file.overview; it.poster = first?.file.posterURL; it.backdrop = nil
             it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil; it.keywords = nil
-            it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil
+            it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
         }
         items[j] = it
         save()

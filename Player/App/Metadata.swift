@@ -263,6 +263,8 @@ struct TMDBDetails {
     var collectionId: Int? = nil
     var collectionName: String? = nil
     var collectionPoster: URL? = nil
+    var regionCodes: [String] = []
+    var lang: String? = nil
 }
 
 extension TMDB {
@@ -336,10 +338,16 @@ extension TMDB {
                             }(),
                             keywords: ((o.dict("keywords")?.arr(tv ? "results" : "keywords")) ?? []).compactMap { $0.str("name")?.lowercased() }
                                 + (o.arr("networks") + o.arr("production_companies")).compactMap { $0.str("name").map { "net:" + $0.lowercased() } }
-                                + ["#v2", "#v3"],
+                                + ["#v2", "#v3", "#v4"],
                             collectionId: o.dict("belongs_to_collection")?.int("id"),
                             collectionName: o.dict("belongs_to_collection")?.str("name"),
-                            collectionPoster: o.dict("belongs_to_collection")?.str("poster_path").flatMap { URL(string: imageBase + "w500" + $0) })
+                            collectionPoster: o.dict("belongs_to_collection")?.str("poster_path").flatMap { URL(string: imageBase + "w500" + $0) },
+                            regionCodes: {
+                                var out: [String] = []
+                                for c in ((o["origin_country"] as? [String]) ?? []) + o.arr("production_countries").compactMap({ $0.str("iso_3166_1") }) where !out.contains(c) { out.append(c) }
+                                return out
+                            }(),
+                            lang: o.str("original_language"))
         store(key, d)
         return d
     }
