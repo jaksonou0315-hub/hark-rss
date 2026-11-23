@@ -217,11 +217,24 @@ final class MPVMetalLayer: CAMetalLayer {
 final class MPVView: UIView {
     override class var layerClass: AnyClass { MPVMetalLayer.self }
     var metalLayer: MPVMetalLayer { layer as! MPVMetalLayer }
+    /// mpv's MoltenVK context only re-reads the layer size on a VO reconfig, so rotation needs a nudge.
+    var onResize: (() -> Void)?
+    private var lastSize: CGSize = .zero
+    private var resizeWork: DispatchWorkItem?
     override func layoutSubviews() {
         super.layoutSubviews()
+        if bounds.width > 1, bounds.height > 1, bounds.size != lastSize {
+            let had = lastSize != .zero
+            lastSize = bounds.size
+            if had {
+                resizeWork?.cancel()
+                let w = DispatchWorkItem { [weak self] in self?.onResize?() }
+                resizeWork = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
+            }
+        }
         let sc = window?.screen.nativeScale ?? UIScreen.main.nativeScale
         metalLayer.contentsScale = sc
-        metalLayer.frame = bounds
         let sz = CGSize(width: bounds.width * sc, height: bounds.height * sc)
         if sz.width > 1, sz.height > 1, metalLayer.drawableSize != sz { metalLayer.drawableSize = sz }
     }
@@ -283,7 +296,7 @@ final class MPVCore: @unchecked Sendable {
         q.async { [weak self] in
             guard let self, let m = self.handle else { return }
             while true {
-                guard let ev = mpv_wait_event(m, 0) else { break }
+                guard self.handle != nil, let ev = mpv_wait_event(m, 0) else { break }
                 let id = ev.pointee.event_id
                 if id == MPV_EVENT_NONE { break }
                 switch id {
@@ -315,6 +328,17 @@ final class MPVCore: @unchecked Sendable {
     }
 
     func set(_ k: String, _ v: String) { if let h = handle { mpv_set_property_string(h, k, v) } }
+    func getString(_ k: String) -> String? {
+        guard let h = handle, let c = mpv_get_property_string(h, k) else { return nil }
+        defer { mpv_free(c) }
+        return String(cString: c)
+    }
+    /// Forces a VO reconfig (new layer size) by nudging the aspect override imperceptibly, then clearing it.
+    func refitVideo() {
+        guard handle != nil, let a = getString("video-params/aspect").flatMap(Double.init), a > 0 else { return }
+        set("video-aspect-override", String(format: "%.6f", a * 1.0007))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.set("video-aspect-override", "-1") }
+    }
     func string(_ k: String) -> String? {
         guard let h = handle, let c = mpv_get_property_string(h, k) else { return nil }
         defer { mpv_free(c) }
@@ -361,7 +385,8 @@ final class MPVCore: @unchecked Sendable {
         handle = nil
         mpv_set_wakeup_callback(h, nil, nil)
         MPVGuard.mark("terminate")
-        DispatchQueue.global(qos: .utility).async { mpv_terminate_destroy(h); MPVGuard.clear() }
+        // same serial queue as drain(), so mpv_wait_event never runs on a destroyed handle
+        q.async { mpv_terminate_destroy(h); DispatchQueue.main.async { MPVGuard.clear() } }
     }
 }
 
@@ -379,6 +404,7 @@ final class MPVEngine: MediaEngine {
         mview.metalLayer.backgroundColor = UIColor.black.cgColor
         mview.metalLayer.contentsScale = UIScreen.main.nativeScale
         core = MPVCore(layer: mview.metalLayer)
+        mview.onResize = { [weak core] in core?.refitVideo() }
         applySubtitleStyle()
     }
 
