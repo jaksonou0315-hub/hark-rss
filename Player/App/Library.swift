@@ -455,6 +455,9 @@ final class LibraryStore: ObservableObject {
                     for i in item.files.indices {
                         if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                             item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
+                            if item.files[i].episode == nil, pf.episode != nil {          // 编辑信息里手动指定的季/集
+                                item.files[i].season = pf.season; item.files[i].episode = pf.episode
+                            }
                         }
                     }
                 }
@@ -477,7 +480,21 @@ final class LibraryStore: ObservableObject {
 
     // MARK: manual edits (编辑信息 / 移除 / 单片重新扫描)
 
-    struct Override: Codable { var match: TMDBMatch? }       // nil match = 使用原文件数据
+    struct Override: Codable {                              // nil match = 使用原文件数据
+        var match: TMDBMatch?
+        var season: Int? = nil                              // 编辑信息里手动指定的第几季 / 第几集（剧集）
+        var episode: Int? = nil
+    }
+
+    /// Pin season / episode on an item's files (sorted by name; episode counts up from the chosen one).
+    nonisolated static func pinEpisodes(_ it: inout LibraryItem, season: Int, episode: Int?) {
+        let order = it.files.indices.sorted { it.files[$0].file.name.localizedStandardCompare(it.files[$1].file.name) == .orderedAscending }
+        for (k, i) in order.enumerated() {
+            it.files[i].season = season
+            it.files[i].episode = (episode ?? 1) + k
+            it.files[i].episodeTitle = nil; it.files[i].still = nil
+        }
+    }
     private(set) var overrides: [String: Override] = {
         guard let d = UserDefaults.standard.data(forKey: "lib.overrides"),
               let v = try? JSONDecoder().decode([String: Override].self, from: d) else { return [:] }
@@ -491,8 +508,11 @@ final class LibraryStore: ObservableObject {
     }
 
     /// 编辑信息: pin a TMDB match (or the file's own data) for this item; survives rescans.
-    func applyMatch(_ itemId: String, _ m: TMDBMatch?) async {
-        overrides[itemId] = Override(match: m)
+    func applyMatch(_ itemId: String, _ m: TMDBMatch?, season: Int? = nil, episode: Int? = nil) async {
+        var sn = season, ep = episode
+        if sn == nil, let o = overrides[itemId], o.match?.id == m?.id { sn = o.season; ep = o.episode }
+        if m?.kind != "tv" { sn = nil; ep = nil }
+        overrides[itemId] = Override(match: m, season: sn, episode: ep)
         guard let j = items.firstIndex(where: { $0.id == itemId }) else { return }
         var it = items[j]
         if let m {
@@ -506,6 +526,7 @@ final class LibraryStore: ObservableObject {
             it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
             it.dbId = nil; it.dbRating = nil; it.dbIntro = nil; it.dbGenres = nil
             for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
+            if let sn { Self.pinEpisodes(&it, season: sn, episode: ep) }
         } else {
             let first = it.files.first
             let p = first.map { NameParser.parse($0.file.name, parents: []) }
@@ -690,6 +711,9 @@ final class LibraryStore: ObservableObject {
                 let gs = m.genreIds.compactMap { TMDB.genreName($0) }
                 if !gs.isEmpty { item.genres = gs }
                 if m.kind == "tv" { item.kind = "tv" }
+                if let manual, manual.match?.id == m.id, m.kind == "tv", let sn = manual.season {
+                    Self.pinEpisodes(&item, season: sn, episode: manual.episode)
+                }
             }
             if item.isTV, let tid = item.tmdbId {
                 let missing = Set(item.files.filter { $0.episodeTitle == nil && $0.episode != nil }.compactMap { $0.season })

@@ -224,6 +224,10 @@ struct EditInfoView: View {
     @State private var loading = false
     @State private var showRules = false
     @State private var saving = false
+    @State private var pickSeason = 1
+    @State private var pickEpisode = 1
+    @State private var seasonCount: [Int: Int] = [:]     // tmdb id → 季数
+    @State private var episodeCount: [String: Int] = [:]  // "id|季" → 集数
 
     var body: some View {
         NavigationStack {
@@ -266,6 +270,7 @@ struct EditInfoView: View {
                                     }
                                     if let d = m.date ?? m.year.map(String.init) { Text(d).font(.subheadline).foregroundStyle(.secondary) }
                                     if let o = m.overview, !o.isEmpty { Text(o).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                                    if m.kind == "tv" && selected == m.id { episodeRow(m) }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -285,14 +290,7 @@ struct EditInfoView: View {
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Image(systemName: "xmark") } }
                 ToolbarItem(placement: .primaryAction) { Button("命名规则") { showRules = true } }
                 ToolbarItem(placement: .bottomBar) {
-                    Button {
-                        saving = true
-                        Task {
-                            let m = selected == -1 ? nil : results.first { $0.id == selected }
-                            await library.applyMatch(item.id, m)
-                            dismiss()
-                        }
-                    } label: {
+                    Button { save() } label: {
                         Text(saving ? "正在保存…" : "保存").bold().frame(maxWidth: .infinity)
                     }
                     .disabled(selected == nil || saving)
@@ -303,23 +301,76 @@ struct EditInfoView: View {
                 query = item.title
                 tv = item.isTV
                 selected = item.tmdbId ?? (library.overrides[item.id] != nil ? -1 : nil)
+                let o = library.overrides[item.id]
+                let f = item.files.first
+                pickSeason = o?.season ?? f?.season ?? 1
+                pickEpisode = o?.episode ?? f?.episode ?? 1
                 await search()
             }
         }
     }
 
-    private func choice<C: View>(id: Int, @ViewBuilder _ content: () -> C) -> some View {
-        Button { selected = id } label: {
-            HStack(spacing: 10) {
-                content()
-                Image(systemName: selected == id ? "checkmark.circle.fill" : "circle")
-                    .font(.title2).foregroundStyle(selected == id ? .green : .secondary)
+    private func save() {
+        guard !saving else { return }
+        saving = true
+        Task {
+            let m = selected == -1 ? nil : results.first { $0.id == selected }
+            if let m, m.kind == "tv" {
+                await library.applyMatch(item.id, m, season: pickSeason, episode: pickEpisode)
+            } else {
+                await library.applyMatch(item.id, m)
             }
-            .padding(12)
-            .background(RoundedRectangle(cornerRadius: 14).strokeBorder(selected == id ? Color.green : Color.secondary.opacity(0.3), lineWidth: selected == id ? 2 : 1))
-            .contentShape(Rectangle())
+            dismiss()
         }
-        .buttonStyle(.plain)
+    }
+
+    /// 剧集结果：第几季 / 第几集 / 确认
+    @ViewBuilder private func episodeRow(_ m: TMDBMatch) -> some View {
+        let seasons = max(seasonCount[m.id] ?? 0, pickSeason, 1)
+        let eps = max(episodeCount["\(m.id)|\(pickSeason)"] ?? 0, pickEpisode, 1)
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(1...max(seasons, 1), id: \.self) { n in
+                    Button("第\(n)季") { pickSeason = n; pickEpisode = 1; Task { await loadEpisodes(m.id, n) } }
+                }
+            } label: { chip("第\(pickSeason)季") }
+            Menu {
+                ForEach(1...max(eps, 1), id: \.self) { n in Button("第\(n)集") { pickEpisode = n } }
+            } label: { chip("第\(pickEpisode)集") }
+            Button { save() } label: { chip(saving ? "保存中" : "确认") }
+                .disabled(saving)
+        }
+        .padding(.top, 4)
+        .task(id: m.id) {
+            if seasonCount[m.id] == nil, let d = await TMDB.details(id: m.id, tv: true) { seasonCount[m.id] = d.seasonCount ?? 1 }
+            await loadEpisodes(m.id, pickSeason)
+        }
+    }
+
+    private func loadEpisodes(_ id: Int, _ sn: Int) async {
+        let key = "\(id)|\(sn)"
+        guard episodeCount[key] == nil else { return }
+        let e = await TMDB.season(tvId: id, season: sn)
+        episodeCount[key] = e.keys.max() ?? 0
+    }
+
+    private func chip(_ t: String) -> some View {
+        Text(t).font(.subheadline.weight(.medium)).foregroundStyle(.white)
+            .lineLimit(1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity).frame(height: 32)
+            .background(Color.green, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func choice<C: View>(id: Int, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 10) {
+            content()
+            Image(systemName: selected == id ? "checkmark.circle.fill" : "circle")
+                .font(.title2).foregroundStyle(selected == id ? .green : .secondary)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14).strokeBorder(selected == id ? Color.green : Color.secondary.opacity(0.3), lineWidth: selected == id ? 2 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture { selected = id }     // not a Button, so the 季/集/确认 controls inside stay tappable
     }
 
     private func search() async {
