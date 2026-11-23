@@ -154,24 +154,7 @@ struct SubtitleStyleEditor: View {
     var body: some View {
         Section {
             preview
-            VStack(alignment: .leading, spacing: 8) {
-                Text("颜色")
-                HStack(spacing: 12) {
-                    ForEach(SubtitleStyle.presetColors, id: \.1) { name, c in
-                        Button { style.color = c } label: {
-                            Circle().fill(Color(red: Double((c >> 16) & 0xFF) / 255, green: Double((c >> 8) & 0xFF) / 255, blue: Double(c & 0xFF) / 255))
-                                .frame(width: 28, height: 28)
-                                .overlay(Circle().stroke(Color.accentColor, lineWidth: style.color == c ? 3 : 0).padding(-3))
-                                .accessibilityLabel(name)
-                        }.buttonStyle(.plain)
-                    }
-                    ColorPicker("", selection: Binding(get: { style.swiftUIColor }, set: { col in
-                        let u = UIColor(col); var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-                        u.getRed(&r, green: &g, blue: &b, alpha: &a)
-                        style.color = (Int(max(0, min(1, r)) * 255) << 16) | (Int(max(0, min(1, g)) * 255) << 8) | Int(max(0, min(1, b)) * 255)
-                    }), supportsOpacity: false).labelsHidden()
-                }
-            }
+            ColorSlider(color: $style.color)
             FillSlider(title: "字幕大小", value: $style.scale, range: 50...200, step: 10) { "\(Int($0))%" }
             FillSlider(title: "粗细", value: Binding(get: { Double(style.weight) }, set: { style.weight = Int($0.rounded()) }),
                        range: 0...3, step: 1) { SubtitleStyle.weightNames[max(0, min(3, Int($0.rounded())))] }
@@ -305,6 +288,73 @@ struct FillSlider: View {
         .accessibilityAdjustableAction { dir in
             let st = step > 0 ? step : (range.upperBound - range.lowerBound) / 20
             value = max(range.lowerBound, min(range.upperBound, value + (dir == .increment ? st : -st)))
+        }
+    }
+}
+
+
+/// Spectrum slider: white at the far left, then every hue from red round to red. Drag to pick a colour.
+struct ColorSlider: View {
+    @Binding var color: Int
+    @State private var pos: Double = -1
+    private static let whiteZone = 0.08
+
+    static func color(at p: Double) -> Int {
+        if p <= whiteZone { return 0xFFFFFF }
+        let h = (p - whiteZone) / (1 - whiteZone)
+        let u = UIColor(hue: h, saturation: 0.85, brightness: 1, alpha: 1)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        u.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (Int(r * 255) << 16) | (Int(g * 255) << 8) | Int(b * 255)
+    }
+    static func pos(of c: Int) -> Double {
+        let u = UIColor(red: Double((c >> 16) & 0xFF) / 255, green: Double((c >> 8) & 0xFF) / 255, blue: Double(c & 0xFF) / 255, alpha: 1)
+        var h: CGFloat = 0, sat: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        u.getHue(&h, saturation: &sat, brightness: &b, alpha: &a)
+        if sat < 0.2 { return whiteZone / 2 }
+        return whiteZone + Double(h) * (1 - whiteZone)
+    }
+    private var stops: [Gradient.Stop] {
+        var st: [Gradient.Stop] = [.init(color: .white, location: 0), .init(color: .white, location: Self.whiteZone)]
+        for i in 0...12 {
+            let h = Double(i) / 12
+            st.append(.init(color: Color(hue: h, saturation: 0.85, brightness: 1), location: Self.whiteZone + h * (1 - Self.whiteZone)))
+        }
+        return st
+    }
+    private var swatch: Color {
+        Color(red: Double((color >> 16) & 0xFF) / 255, green: Double((color >> 8) & 0xFF) / 255, blue: Double(color & 0xFF) / 255)
+    }
+
+    var body: some View {
+        GeometryReader { g in
+            let p = pos < 0 ? Self.pos(of: color) : pos
+            let h = g.size.height
+            ZStack(alignment: .leading) {
+                Capsule().fill(LinearGradient(stops: stops, startPoint: .leading, endPoint: .trailing))
+                Text("字幕颜色").font(.subheadline.weight(.medium)).foregroundStyle(.black.opacity(0.75))
+                    .padding(.leading, 16).allowsHitTesting(false)
+                Circle().fill(swatch)
+                    .overlay(Circle().stroke(.white, lineWidth: 3))
+                    .shadow(color: .black.opacity(0.35), radius: 3)
+                    .frame(width: h - 8, height: h - 8)
+                    .offset(x: 4 + CGFloat(p) * (g.size.width - h))
+            }
+            .contentShape(Capsule())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                let np = max(0, min(1, (v.location.x - h / 2) / max(1, g.size.width - h)))
+                pos = np
+                let c = Self.color(at: np)
+                if c != color { color = c }
+            })
+        }
+        .frame(height: 44)
+        .onChange(of: color) { _, c in if pos >= 0 && Self.color(at: pos) != c { pos = -1 } }
+        .accessibilityElement()
+        .accessibilityLabel("字幕颜色")
+        .accessibilityAdjustableAction { dir in
+            let np = max(0, min(1, (pos < 0 ? Self.pos(of: color) : pos) + (dir == .increment ? 0.05 : -0.05)))
+            pos = np; color = Self.color(at: np)
         }
     }
 }
