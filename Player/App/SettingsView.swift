@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var testing = false
     enum Page: Hashable, Identifiable { case play, av, control, ai; var id: Self { self } }
     @State private var page: Page?
+    @AppStorage(MetaSource.key) private var metaSource = "tmdb"
 
     var body: some View {
         NavigationStack {
@@ -21,6 +22,25 @@ struct SettingsView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } header: { Text("播放体验") }
+
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            SourceCard(name: "TMDB", detail: "海报 · 评分 · 简介", color: Color(red: 0.01, green: 0.15, blue: 0.25),
+                                       accent: Color(red: 0.0, green: 0.82, blue: 0.67), selected: metaSource != "douban") { metaSource = "tmdb" }
+                            SourceCard(name: "豆瓣", detail: "TMDB 海报 + 豆瓣评分简介", color: Color(red: 0.0, green: 0.45, blue: 0.12),
+                                       accent: .white, selected: metaSource == "douban") {
+                                metaSource = "douban"
+                                Task { await library.enrichDouban() }
+                            }
+                        }
+                        .padding(.horizontal, 2).padding(.vertical, 4)
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                } header: { Text("刮削源") } footer: {
+                    Text("选豆瓣时，海报、分类和剧集仍来自 TMDB，评分和简介换成豆瓣的（找不到时沿用 TMDB）。豆瓣资料会在后台逐部补全。")
+                }
 
                 Section {
                     SecureField("TMDB API Key 或 Read Access Token", text: $settings.tmdbKey)
@@ -346,5 +366,33 @@ struct PlayerButtonsPage: View {
                 Toggle("倍速 按钮", isOn: $speed)
             } footer: { Text("控制播放器右上角显示哪些按钮。") }
         }
+    }
+}
+
+
+/// Thumbnail-style card for picking the metadata source; white frame = selected.
+struct SourceCard: View {
+    let name: String
+    let detail: String
+    let color: Color
+    let accent: Color
+    let selected: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(name).font(.title2.weight(.heavy)).foregroundStyle(accent)
+                Spacer(minLength: 0)
+                Text(detail).font(.caption).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+            }
+            .padding(12)
+            .frame(width: 170, height: 100, alignment: .leading)
+            .background(color, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Color.white : Color.clear, lineWidth: 3))
+            .overlay(alignment: .topTrailing) {
+                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white).padding(8) }
+            }
+        }
+        .buttonStyle(.plain)
     }
 }

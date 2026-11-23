@@ -40,6 +40,9 @@ struct LibraryItem: Codable, Identifiable, Hashable {
     var collectionPoster: URL? = nil
     var regions: [String]? = nil      // ISO country codes, origin first (region sub-tabs)
     var lang: String? = nil           // TMDB original_language
+    var dbId: String? = nil           // Douban subject id ("" = looked up, not found)
+    var dbRating: Double? = nil
+    var dbIntro: String? = nil
     var files: [LibraryFile]
     var added = Date()
 
@@ -228,6 +231,46 @@ final class LibraryStore: ObservableObject {
         flush()
         if changed > 0 { save() }
         TMDBCache.shared.flush()
+        Task { await enrichDouban() }
+    }
+
+    private var doubanRunning = false
+    /// 豆瓣 source: look up each matched film's Douban score and synopsis, one at a time with a pause
+    /// (Douban throttles bursts). A network failure leaves the film for the next pass.
+    func enrichDouban() async {
+        guard MetaSource.douban, !doubanRunning else { return }
+        doubanRunning = true
+        defer { doubanRunning = false }
+        let todo = items.filter { $0.dbId == nil && $0.tmdbId != nil }
+        var pending: [String: DoubanInfo] = [:]
+        var lastFlush = Date()
+        func flush() {
+            guard !pending.isEmpty else { return }
+            var xs = items
+            for i in xs.indices {
+                guard let d = pending[xs[i].id] else { continue }
+                xs[i].dbId = d.id; xs[i].dbRating = d.rating; xs[i].dbIntro = d.intro
+            }
+            pending = [:]; lastFlush = Date()
+            items = xs
+            save()
+        }
+        var fails = 0
+        for it in todo {
+            guard MetaSource.douban else { break }
+            await AppActivity.shared.waitUntilActive()
+            switch await Douban.lookup(title: it.title, alt: it.originalTitle, year: it.year, tv: it.isTV) {
+            case .found(let d): pending[it.id] = d; fails = 0
+            case .notFound: pending[it.id] = DoubanInfo(id: "", rating: nil, intro: nil); fails = 0
+            case .failed:
+                fails += 1
+                if fails >= 5 { flush(); return }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            if pending.count >= 20 || Date().timeIntervalSince(lastFlush) > 5 { flush() }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+        flush()
     }
 
     // MARK: scanning
@@ -405,6 +448,7 @@ final class LibraryStore: ObservableObject {
                     item.genres = prev.genres; item.certification = prev.certification; item.countries = prev.countries; item.keywords = prev.keywords
                     item.collectionId = prev.collectionId; item.collectionName = prev.collectionName; item.collectionPoster = prev.collectionPoster
                     item.regions = prev.regions; item.lang = prev.lang
+                    item.dbId = prev.dbId; item.dbRating = prev.dbRating; item.dbIntro = prev.dbIntro
                     for i in item.files.indices {
                         if let pf = prev.files.first(where: { $0.id == item.files[i].id }) {
                             item.files[i].episodeTitle = pf.episodeTitle; item.files[i].still = pf.still
@@ -457,6 +501,7 @@ final class LibraryStore: ObservableObject {
             it.genres = gs.isEmpty ? nil : gs
             it.certification = nil; it.countries = nil; it.keywords = nil
             it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
+            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil
             for i in it.files.indices { it.files[i].episodeTitle = nil; it.files[i].still = nil }
         } else {
             let first = it.files.first
@@ -465,9 +510,11 @@ final class LibraryStore: ObservableObject {
             it.overview = first?.file.overview; it.poster = first?.file.posterURL; it.backdrop = nil
             it.rating = nil; it.tmdbId = nil; it.genres = nil; it.certification = nil; it.countries = nil; it.keywords = nil
             it.collectionId = nil; it.collectionName = nil; it.collectionPoster = nil; it.regions = nil; it.lang = nil
+            it.dbId = nil; it.dbRating = nil; it.dbIntro = nil
         }
         items[j] = it
         save()
+        Task { await enrichDouban() }
         if m != nil { await fillEpisodes(itemId) }
         Task { await enrich() }
     }

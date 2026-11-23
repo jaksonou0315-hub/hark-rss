@@ -267,7 +267,7 @@ enum Groupings {
         let defs: [(String, (Double) -> Bool)] = [("9分", { $0 >= 9 }), ("8分", { $0 >= 8 && $0 < 9 }), ("7分", { $0 >= 7 && $0 < 8 }),
                                                   ("6分", { $0 >= 6 && $0 < 7 }), ("5分", { $0 >= 5 && $0 < 6 }), ("0-5分", { $0 > 0 && $0 < 5 })]
         return defs.compactMap { name, f in
-            let xs = items.filter { f($0.rating ?? 0) }
+            let xs = items.filter { f($0.shownRating ?? 0) }
             return xs.isEmpty ? nil : Bucket(name: name, items: xs)
         }
     }
@@ -696,7 +696,7 @@ struct HeroCarousel: View {
                     title(it)
                 }
                 meta(it, d)
-                if let o = (d?.overview?.isEmpty == false ? d?.overview : it.overview), !o.isEmpty {
+                if let o = (MetaSource.douban && it.dbIntro?.isEmpty == false ? it.dbIntro : d?.overview?.isEmpty == false ? d?.overview : it.overview), !o.isEmpty {
                     Text(o).font(.footnote).foregroundStyle(.white.opacity(0.85))
                         .lineLimit(3).multilineTextAlignment(.leading)
                         .padding(.horizontal, 18)
@@ -720,11 +720,11 @@ struct HeroCarousel: View {
         if let g = (d?.genres ?? it.genres)?.first { parts.append(g) }
         let ps = parts
         return HStack(spacing: 7) {
-            if let r = it.rating, r > 0 {
+            if let r = it.shownRating, r > 0 {
                 HStack(spacing: 2) { Image(systemName: "star.fill").foregroundStyle(.yellow); Text(String(format: "%.1f", r)) }
             }
             ForEach(Array(ps.enumerated()), id: \.offset) { i, p in
-                if i > 0 || (it.rating ?? 0) > 0 { Text("|").foregroundStyle(.white.opacity(0.5)) }
+                if i > 0 || (it.shownRating ?? 0) > 0 { Text("|").foregroundStyle(.white.opacity(0.5)) }
                 Text(p)
             }
         }
@@ -801,7 +801,7 @@ struct PosterTile: View {
                 .frame(width: width, height: width * 1.5)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
-                    if let r = item.rating, r > 0 {
+                    if let r = item.shownRating, r > 0 {
                         Text(String(format: "%.1f", r)).font(.caption.weight(.heavy)).foregroundStyle(.white)
                             .shadow(color: .black, radius: 3).padding(6)
                     }
@@ -926,7 +926,7 @@ struct ItemGridView: View {
         let a = asc
         switch sort {
         case 1: return xs.sorted { let r = $0.title.localizedStandardCompare($1.title); return a ? r == .orderedAscending : r == .orderedDescending }
-        case 2: return xs.sorted { a ? ($0.rating ?? 0, $0.title) < ($1.rating ?? 0, $1.title) : ($0.rating ?? 0, $1.title) > ($1.rating ?? 0, $0.title) }
+        case 2: return xs.sorted { a ? ($0.shownRating ?? 0, $0.title) < ($1.shownRating ?? 0, $1.title) : ($0.shownRating ?? 0, $1.title) > ($1.shownRating ?? 0, $0.title) }
         case 3: return xs.sorted { a ? ($0.year ?? 9999, $0.title) < ($1.year ?? 9999, $1.title) : ($0.year ?? 0, $1.title) > ($1.year ?? 0, $0.title) }
         default: return xs.sorted { a ? $0.added < $1.added : $0.added > $1.added }
         }

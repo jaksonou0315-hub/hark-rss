@@ -107,7 +107,7 @@ struct PosterCard: View {
                 .aspectRatio(2/3, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(alignment: .topTrailing) {
-                    if let r = item.rating, r > 0 {
+                    if let r = item.shownRating, r > 0 {
                         Text(String(format: "%.1f", r)).font(.caption2.bold())
                             .padding(.horizontal, 6).padding(.vertical, 3)
                             .glass(in: Capsule(), tint: .black.opacity(0.3))

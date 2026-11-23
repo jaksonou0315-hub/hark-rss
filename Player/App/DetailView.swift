@@ -207,7 +207,7 @@ struct DetailView: View {
         if let c = details?.countries, !c.isEmpty { parts.append(c.joined(separator: ",")) }
         if let g = details?.genres, !g.isEmpty { parts.append(g.prefix(2).joined(separator: ",")) }
         if !item.isTV, let rt = details?.runtime, rt > 0 { parts.append("\(rt / 60 > 0 ? "\(rt / 60)小时" : "")\(rt % 60)分钟") }
-        let rating = details?.rating ?? item.rating
+        let rating = MetaSource.douban && (item.dbRating ?? 0) > 0 ? item.dbRating : (details?.rating ?? item.rating)
         let ps = parts
         return HStack(spacing: 8) {
             if let r = rating, r > 0 {
@@ -261,7 +261,7 @@ struct DetailView: View {
     }
 
     private func overview(_ item: LibraryItem) -> some View {
-        let text = (details?.overview?.isEmpty == false ? details?.overview : item.overview) ?? ""
+        let text = (MetaSource.douban && item.dbIntro?.isEmpty == false ? item.dbIntro : details?.overview?.isEmpty == false ? details?.overview : item.overview) ?? ""
         let head: String = {
             var t = "「\(item.title)"
             if item.isTV, let s = season ?? item.seasons.first { t += " · 第\(s)季" }
@@ -275,6 +275,15 @@ struct DetailView: View {
                     .lineLimit(expanded ? nil : 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .onTapGesture { withAnimation(.easeInOut) { expanded.toggle() } }
+            }
+            if let r = item.dbRating, r > 0, let id = item.dbId, !id.isEmpty {
+                Link(destination: URL(string: "https://movie.douban.com/subject/\(id)/")!) {
+                    HStack(spacing: 6) {
+                        Text("豆瓣").font(.caption2.weight(.black)).padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color(red: 0.0, green: 0.71, blue: 0.11), in: RoundedRectangle(cornerRadius: 3)).foregroundStyle(.white)
+                        Text(String(format: "%.1f", r)).font(.subheadline).foregroundStyle(.white)
+                    }
+                }
             }
             if let vc = details?.voteCount, vc > 0, let r = details?.rating, r > 0 {
                 HStack(spacing: 6) {
@@ -563,7 +572,7 @@ struct DetailView: View {
             }
             scored.sort { l, r in
                 if l.score != r.score { return l.score > r.score }
-                return (l.item.rating ?? 0) > (r.item.rating ?? 0)
+                return (l.item.shownRating ?? 0) > (r.item.shownRating ?? 0)
             }
             for e in scored { out.append(e.item) }
         }
@@ -584,7 +593,7 @@ struct DetailView: View {
                                         .frame(width: 124, height: 180)
                                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                         .overlay(alignment: .bottomTrailing) {
-                                            if let r = it.rating, r > 0 {
+                                            if let r = it.shownRating, r > 0 {
                                                 Text(String(format: "%.1f", r)).font(.caption.weight(.heavy)).padding(6)
                                                     .shadow(color: .black, radius: 3)
                                             }
