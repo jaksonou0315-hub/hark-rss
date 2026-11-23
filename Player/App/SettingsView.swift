@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var library: LibraryStore
+    @State private var tmdbStatus: String?
+    @State private var testing = false
     enum Page: Hashable, Identifiable { case play, subs, style, ai; var id: Self { self } }
     @State private var page: Page?
 
@@ -20,16 +23,40 @@ struct SettingsView: View {
                 } header: { Text("播放体验") }
 
                 Section {
-                    NavigationLink { DataSettingsPage().navigationTitle("数据与资源") } label: {
-                        Label("数据与资源", systemImage: "externaldrive")
+                    SecureField("TMDB API Key 或 Read Access Token", text: $settings.tmdbKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Picker("资料语言", selection: $settings.tmdbLanguage) {
+                        Text("简体中文").tag("zh-CN"); Text("繁體中文").tag("zh-TW"); Text("English").tag("en-US"); Text("日本語").tag("ja-JP")
                     }
-                    NavigationLink { LibrarySettingsPage().navigationTitle("媒体库") } label: {
-                        LabeledContent { Text("\(library.items.count)") } label: { Label("媒体库", systemImage: "square.stack") }
+                    Button {
+                        Task {
+                            testing = true
+                            do { try await TMDB.test(); tmdbStatus = "✅ Key 可用" } catch { tmdbStatus = "❌ \(error.localizedDescription)" }
+                            testing = false
+                        }
+                    } label: { HStack { Text("测试 TMDB 连接"); if testing { Spacer(); ProgressView() } } }
+                    if let tmdbStatus { Text(tmdbStatus).font(.footnote) }
+                } header: { Text("海报墙 · TMDB") } footer: {
+                    Text("在 themoviedb.org › 设置 › API 免费申请。Key 只保存在本机钥匙串中。")
+                }
+
+                Section("媒体库") {
+                    LabeledContent("影片数量", value: "\(library.items.count)")
+                    Button("完整重新扫描") { Task { await library.scan(force: true) } }
+                    NavigationLink("扫描诊断") { ScanDiagnosticsView() }
+                    NavigationLink("下载管理") { DownloadsView() }
+                    if library.removedCount > 0 {
+                        Button("恢复已移除的影片（\(library.removedCount) 个文件）") {
+                            library.restoreRemoved()
+                            Task { await library.scan(force: false) }
+                        }
                     }
-                    NavigationLink { DownloadsView() } label: { Label("下载管理", systemImage: "arrow.down.circle") }
-                    NavigationLink { ScanDiagnosticsView() } label: { Label("扫描诊断", systemImage: "stethoscope") }
-                    NavigationLink { AboutSettingsPage().navigationTitle("关于 Hark 影音") } label: { Label("关于", systemImage: "info.circle") }
-                } header: { Text("使用偏好") }
+                }
+
+                Section {
+                    LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                    LabeledContent("解码内核", value: "VLCKit 3.6 (FFmpeg)")
+                } header: { Text("关于 Hark 影音") }
             }
             .navigationTitle("设置")
             .navigationDestination(item: $page) { p in
@@ -153,67 +180,6 @@ struct AISettingsPage: View {
                     Text("使用 iPhone 自带的「翻译」，语言包下载后可离线使用。可在「设置 › App › 翻译」管理已下载的语言。")
                 }
 
-        }
-    }
-}
-struct DataSettingsPage: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var library: LibraryStore
-    @State private var tmdbStatus: String?
-    @State private var testing = false
-    var body: some View {
-        Form {
-                Section {
-                    SecureField("TMDB API Key 或 Read Access Token", text: $settings.tmdbKey)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Picker("资料语言", selection: $settings.tmdbLanguage) {
-                        Text("简体中文").tag("zh-CN"); Text("繁體中文").tag("zh-TW"); Text("English").tag("en-US"); Text("日本語").tag("ja-JP")
-                    }
-                    Button {
-                        Task {
-                            testing = true
-                            do { try await TMDB.test(); tmdbStatus = "✅ Key 可用" } catch { tmdbStatus = "❌ \(error.localizedDescription)" }
-                            testing = false
-                        }
-                    } label: { HStack { Text("测试 TMDB 连接"); if testing { Spacer(); ProgressView() } } }
-                    if let tmdbStatus { Text(tmdbStatus).font(.footnote) }
-                } header: { Text("海报墙 · TMDB") } footer: {
-                    Text("在 themoviedb.org › 设置 › API 免费申请。Key 只保存在本机钥匙串中。")
-                }
-
-        }
-    }
-}
-struct LibrarySettingsPage: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var library: LibraryStore
-
-    var body: some View {
-        Form {
-                Section("媒体库") {
-                    LabeledContent("影片数量", value: "\(library.items.count)")
-                    Button("完整重新扫描") { Task { await library.scan(force: true) } }
-                    if library.removedCount > 0 {
-                        Button("恢复已移除的影片（\(library.removedCount) 个文件）") {
-                            library.restoreRemoved()
-                            Task { await library.scan(force: false) }
-                        }
-                    }
-                }
-
-        }
-    }
-}
-struct AboutSettingsPage: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var library: LibraryStore
-
-    var body: some View {
-        Form {
-                Section {
-                    LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-                    LabeledContent("解码内核", value: "VLCKit 3.6 (FFmpeg)")
-                } header: { Text("关于 Hark 影音") }
         }
     }
 }
