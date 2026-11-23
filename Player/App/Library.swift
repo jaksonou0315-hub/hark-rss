@@ -80,7 +80,8 @@ final class LibraryStore: ObservableObject {
         if live.line != l { live.line = l }
     }
     private static let ioQueue = DispatchQueue(label: "library.save", qos: .utility)
-    private var enriching = false
+    @Published private(set) var enriching = false
+    @Published private(set) var enrichLeft = 0
 
     private let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -176,7 +177,7 @@ final class LibraryStore: ObservableObject {
     func enrich() async {
         guard !enriching else { return }
         enriching = true
-        defer { enriching = false }
+        defer { enriching = false; enrichLeft = 0 }
         let srcs = SourceStore.shared.sources
         let prefetchOff = Set(srcs.filter { $0.extra["prefetch"] == "0" }.map(\.id))
         let todo = items.filter { it in
@@ -203,13 +204,26 @@ final class LibraryStore: ObservableObject {
             pending = [:]; lastFlush = Date()
             items = xs
         }
-        for it in todo {
+        enrichLeft = todo.count
+        // 8 requests in flight at a time (TMDB allows ~40/s); one at a time took over an hour for a big library,
+        // and anything not yet enriched sits in the region tabs' 其他.
+        var idx = 0
+        while idx < todo.count {
             await AppActivity.shared.waitUntilActive()
-            guard let id = it.tmdbId, let d = await TMDB.details(id: id, tv: it.isTV) else { continue }
-            pending[it.id] = d
-            changed += 1
-            if pending.count >= 60 || Date().timeIntervalSince(lastFlush) > 4 { flush() }
-            if changed % 120 == 0 { save() }
+            let chunk = Array(todo[idx..<min(idx + 8, todo.count)])
+            idx += chunk.count
+            let got = await withTaskGroup(of: (String, TMDBDetails?).self) { g -> [(String, TMDBDetails?)] in
+                for it in chunk {
+                    let id = it.tmdbId ?? 0, tv = it.isTV, key = it.id
+                    g.addTask { (key, await TMDB.details(id: id, tv: tv)) }
+                }
+                var out: [(String, TMDBDetails?)] = []
+                for await r in g { out.append(r) }
+                return out
+            }
+            for (k, d) in got { if let d { pending[k] = d; changed += 1 } }
+            enrichLeft = todo.count - idx
+            if pending.count >= 80 || Date().timeIntervalSince(lastFlush) > 4 { flush(); save() }
         }
         flush()
         if changed > 0 { save() }

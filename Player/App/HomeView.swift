@@ -458,10 +458,10 @@ struct HomeView: View {
 
     private var topBar: some View {
         HStack {
-            if library.scanning {
+            if library.scanning || library.enrichLeft > 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill").foregroundStyle(.green)
-                    Text("数据同步中").font(.subheadline.weight(.medium))
+                    Text(library.scanning ? "数据同步中" : "补全分类 剩余 \(library.enrichLeft)").font(.subheadline.weight(.medium)).monospacedDigit()
                     ProgressView().controlSize(.small).tint(.green)
                 }
                 .padding(.horizontal, 16).frame(height: 44)
