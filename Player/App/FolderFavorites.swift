@@ -26,7 +26,13 @@ final class FolderFavorites: ObservableObject {
     func contains(_ s: MediaSource, _ d: RemoteFile?) -> Bool { items.contains { $0.id == fid(s, d) } }
     func toggle(_ s: MediaSource, _ d: RemoteFile?) {
         if contains(s, d) { items.removeAll { $0.id == fid(s, d) } }
-        else { items.append(FavoriteFolder(sourceId: s.id, dir: d, title: d?.name ?? s.name)) }
+        else {
+            items.append(FavoriteFolder(sourceId: s.id, dir: d, title: d?.name ?? s.name))
+            // A new favourite also goes into the media library and gets scanned right away (only the new folder).
+            if !s.kind.isMediaServer {
+                if let d { LibraryStore.shared.addFolder(source: s, dir: d) } else { LibraryStore.shared.addRoot(source: s) }
+            }
+        }
         save()
     }
     func remove(_ f: FavoriteFolder) { items.removeAll { $0.id == f.id }; save() }

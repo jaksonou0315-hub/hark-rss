@@ -108,10 +108,13 @@ final class LibraryStore: ObservableObject {
     var shows: [LibraryItem] { items.filter { $0.isTV }.sorted { $0.added > $1.added } }
 
     func addFolder(source: MediaSource, dir: RemoteFile) {
-        guard !folders.contains(where: { $0.sourceId == source.id && $0.dir.id == dir.id }) else { return }
+        guard !folders.contains(where: { f in
+            f.sourceId == source.id && (f.dir.id == dir.id || f.dir.meta["root"] == "1"
+                || (!f.dir.path.isEmpty && dir.path.hasPrefix(f.dir.path.hasSuffix("/") ? f.dir.path : f.dir.path + "/")))
+        }) else { return }      // already in the library, or inside a library folder
         folders.append(LibraryFolder(sourceId: source.id, dir: dir, title: "\(source.name) · \(dir.name)"))
         save()
-        Task { await scan() }
+        Task { await scan(force: false) }   // delta pass: only the new folder has never been listed
     }
 
     /// Whole drive as one library folder (used by 自动扫描).
