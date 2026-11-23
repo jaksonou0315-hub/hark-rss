@@ -219,7 +219,11 @@ final class MPVView: UIView {
     var metalLayer: MPVMetalLayer { layer as! MPVMetalLayer }
     override func layoutSubviews() {
         super.layoutSubviews()
-        metalLayer.contentsScale = window?.screen.nativeScale ?? UIScreen.main.nativeScale
+        let sc = window?.screen.nativeScale ?? UIScreen.main.nativeScale
+        metalLayer.contentsScale = sc
+        metalLayer.frame = bounds
+        let sz = CGSize(width: bounds.width * sc, height: bounds.height * sc)
+        if sz.width > 1, sz.height > 1, metalLayer.drawableSize != sz { metalLayer.drawableSize = sz }
     }
 }
 

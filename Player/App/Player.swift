@@ -283,10 +283,33 @@ final class PlayerController: NSObject, ObservableObject {
     }
 }
 
+/// Hosts the engine view and re-fits it (and VLC's own render subviews) on every size change, e.g. rotation.
+final class VideoHost: UIView {
+    let inner: UIView
+    init(_ v: UIView) {
+        inner = v
+        super.init(frame: .zero)
+        backgroundColor = .black
+        clipsToBounds = true
+        addSubview(v)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        inner.frame = bounds
+        for sv in inner.subviews {
+            sv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            sv.frame = inner.bounds
+        }
+        inner.setNeedsLayout()
+        inner.layoutIfNeeded()
+    }
+}
+
 struct VideoSurface: UIViewRepresentable {
     let view: UIView
-    func makeUIView(context: Context) -> UIView { view }
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func makeUIView(context: Context) -> VideoHost { VideoHost(view) }
+    func updateUIView(_ uiView: VideoHost, context: Context) { uiView.setNeedsLayout() }
 }
 
 struct PlayerView: View {
