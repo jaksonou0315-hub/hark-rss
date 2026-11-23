@@ -377,12 +377,6 @@ struct DetailView: View {
                         Button { UIPasteboard.general.string = g.drive + "\n" + g.path + "/" + ep.file.name } label: { Label("复制路径", systemImage: "doc.on.doc") }
                     }
                 }
-                Button { play(ep, item) } label: {
-                    Label(resumeLabel(item, ep), systemImage: "play.fill").font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.black).frame(maxWidth: .infinity).frame(height: 44)
-                        .background(.white.opacity(0.92), in: Capsule())
-                }
-                .buttonStyle(.plain)
             }
             .padding(14)
             .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
