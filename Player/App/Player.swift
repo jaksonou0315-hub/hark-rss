@@ -9,7 +9,19 @@ import Combine
 final class PlaybackRouter: ObservableObject {
     static let shared = PlaybackRouter()
     @Published var request: PlayRequest?
-    func play(_ r: PlayRequest) { request = r }
+    /// Show the player without the slide-up; its onAppear snaps to landscape while animations are off,
+    /// so playback starts straight in full screen.
+    func play(_ r: PlayRequest) {
+        guard request == nil else { request = r; return }
+        let phone = UIDevice.current.userInterfaceIdiom == .phone
+        if phone { UIView.setAnimationsEnabled(false) }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { request = r }
+        if phone {
+            OrientationLock.set(.allButUpsideDown, force: .landscapeRight)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { UIView.setAnimationsEnabled(true) }
+        }
+    }
 }
 
 struct TrackInfo: Identifiable, Hashable { var id: Int32; var name: String }
