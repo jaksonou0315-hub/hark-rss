@@ -383,7 +383,7 @@ struct PlayerView: View {
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
         .task { await c.start(); scheduleHide() }
-        .onAppear { OrientationLock.set(.allButUpsideDown) }
+        .onAppear { landscape = true; OrientationLock.set(.allButUpsideDown, force: .landscapeRight) }
         .onDisappear { c.stop(); OrientationLock.set(.portrait, force: .portrait) }
         .onChange(of: c.ended) { _, ended in if ended { close() } }
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }

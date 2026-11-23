@@ -227,7 +227,7 @@ struct NativePlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: showClose)
-        .onAppear { scheduleHide(); OrientationLock.set(.allButUpsideDown) }
+        .onAppear { scheduleHide(); OrientationLock.set(.allButUpsideDown, force: .landscapeRight) }
         .preferredColorScheme(.dark)
         .animation(.easeInOut, value: m.showBadges)
         .task { await m.start() }

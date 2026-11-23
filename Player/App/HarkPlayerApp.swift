@@ -81,11 +81,17 @@ enum OrientationLock {
     @MainActor static var isLandscape: Bool {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.interfaceOrientation.isLandscape ?? false
     }
-    /// Rotate back to portrait first, then run `then` (the dismiss) once the rotation has settled.
+    /// Snap back to portrait without the rotation animation, then close the player without its slide,
+    /// so the library reappears already upright (like Infuse/VidHub).
     @MainActor static func leavePlayer(_ then: @escaping () -> Void) {
         let wasLand = isLandscape
+        if wasLand { UIView.setAnimationsEnabled(false) }
         set(.portrait, force: .portrait)
-        if wasLand { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: then) } else { then() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (wasLand ? 0.12 : 0)) {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { then() }
+            if wasLand { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { UIView.setAnimationsEnabled(true) } }
+        }
     }
 }
 
