@@ -5,7 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var tmdbStatus: String?
     @State private var testing = false
-    enum Page: Hashable, Identifiable { case play, subs, style, ai; var id: Self { self } }
+    enum Page: Hashable, Identifiable { case play, av, control, ai; var id: Self { self } }
     @State private var page: Page?
 
     var body: some View {
@@ -14,8 +14,8 @@ struct SettingsView: View {
                 Section {
                     HStack(spacing: 10) {
                         SettingsTile(title: "播放", icon: "slider.horizontal.3") { page = .play }
-                        SettingsTile(title: "字幕", icon: "captions.bubble") { page = .subs }
-                        SettingsTile(title: "字幕样式", icon: "textformat") { page = .style }
+                        SettingsTile(title: "音画", icon: "play.rectangle") { page = .av }
+                        SettingsTile(title: "操控", icon: "hand.tap") { page = .control }
                         SettingsTile(title: "AI 字幕", icon: "text.bubble") { page = .ai }
                     }
                     .listRowInsets(EdgeInsets())
@@ -62,8 +62,8 @@ struct SettingsView: View {
             .navigationDestination(item: $page) { p in
                 switch p {
                 case .play: PlaybackSettingsPage().navigationTitle("播放")
-                case .subs: SubtitleSettingsPage().navigationTitle("字幕")
-                case .style: Form { SubtitleStyleEditor() }.navigationTitle("字幕样式")
+                case .av: SubtitleSettingsPage().navigationTitle("音画")
+                case .control: ControlSettingsPage().navigationTitle("操控")
                 case .ai: AISettingsPage().navigationTitle("AI 字幕")
                 }
             }
@@ -102,7 +102,6 @@ struct PlaybackSettingsPage: View {
                 Section {
                     Toggle("记住播放进度", isOn: $settings.resumePlayback)
                     Toggle("MP4/MOV 用苹果原生内核", isOn: $settings.nativeEngine)
-                    Toggle("杜比音轨兼容模式", isOn: $settings.dolbyStereo)
                     Picker("MKV 等格式播放内核", selection: $settings.mkvEngine) {
                         ForEach(EngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
@@ -116,7 +115,7 @@ struct PlaybackSettingsPage: View {
                         }
                     }
                 } header: { Text("播放") } footer: {
-                    Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。兼容模式会把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。MKV 内核选「自动」时，文件名带杜比视界 / HDR / 4K / HEVC / Atmos / TrueHD 的用 MPV（能正确显示杜比视界色彩），其他用 VLC；SMB 在线播放始终用 VLC。")
+                    Text("原生内核支持杜比视界、HDR10、杜比全景声和空间音频（SMB 来源除外）。MKV 内核选「自动」时，文件名带杜比视界 / HDR / 4K / HEVC / Atmos / TrueHD 的用 MPV（能正确显示杜比视界色彩），其他用 VLC；SMB 在线播放始终用 VLC。")
                 }
 
         }
@@ -128,6 +127,12 @@ struct SubtitleSettingsPage: View {
 
     var body: some View {
         Form {
+                Section {
+                    Toggle("杜比音轨兼容模式", isOn: $settings.dolbyStereo)
+                } header: { Text("音频") } footer: {
+                    Text("把 MKV 里的 TrueHD / E-AC3 多声道混成立体声，解决没声音的问题。")
+                }
+
                 Section {
                     Toggle("自动加载同名外挂字幕", isOn: $settings.autoSidecar)
                     Picker("首选字幕语言", selection: $settings.preferredSubLang) {
@@ -150,6 +155,7 @@ struct SubtitleSettingsPage: View {
                     Text("射手网：assrt.net 登录后在「用户面板」获取 Token；OpenSubtitles：opensubtitles.com › API Consumers 创建 Key。")
                 }
 
+                SubtitleStyleEditor()
         }
     }
 }
@@ -180,6 +186,30 @@ struct AISettingsPage: View {
                     Text("使用 iPhone 自带的「翻译」，语言包下载后可离线使用。可在「设置 › App › 翻译」管理已下载的语言。")
                 }
 
+        }
+    }
+}
+
+struct ControlSettingsPage: View {
+    @AppStorage("ctl.doubleTap") private var doubleTapSeek = true
+    @AppStorage("ctl.seek") private var seekStep = 10
+    @AppStorage("ctl.hide") private var hideAfter = 4.0
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("双击左右两侧快退 / 快进", isOn: $doubleTapSeek)
+                Picker("快进 / 快退步长", selection: $seekStep) {
+                    ForEach([5, 10, 15, 30, 60], id: \.self) { Text("\($0) 秒").tag($0) }
+                }
+            } header: { Text("手势") } footer: {
+                Text("关闭双击后，双击和单击一样只显示或隐藏控制栏。步长同时用于控制栏上的快进 / 快退按钮。")
+            }
+            Section {
+                Picker("控制栏自动隐藏", selection: $hideAfter) {
+                    ForEach([2.0, 4.0, 6.0, 10.0], id: \.self) { Text("\(Int($0)) 秒").tag($0) }
+                }
+            } header: { Text("控制栏") }
         }
     }
 }

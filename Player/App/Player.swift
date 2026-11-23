@@ -331,6 +331,9 @@ struct PlayerView: View {
     @State private var showOnline = false
     @State private var landscape = false
     @State private var trackSheet: TrackSheetKind?
+    @AppStorage("ctl.seek") private var seekStep = 10
+    @AppStorage("ctl.hide") private var hideAfter = 4.0
+    @AppStorage("ctl.doubleTap") private var doubleTapSeek = true
 
     init(request: PlayRequest) { _c = StateObject(wrappedValue: PlayerController(request)) }
 
@@ -340,10 +343,10 @@ struct PlayerView: View {
             VideoSurface(view: c.videoView).ignoresSafeArea()
             HStack(spacing: 0) {
                 Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { c.skip(-10); flash("后退 10 秒") }
+                    .onTapGesture(count: 2) { guard doubleTapSeek else { toggleControls(); return }; c.skip(Int32(-seekStep)); flash("后退 \(seekStep) 秒") }
                     .onTapGesture { toggleControls() }
                 Color.clear.contentShape(Rectangle())
-                    .onTapGesture(count: 2) { c.skip(10); flash("快进 10 秒") }
+                    .onTapGesture(count: 2) { guard doubleTapSeek else { toggleControls(); return }; c.skip(Int32(seekStep)); flash("快进 \(seekStep) 秒") }
                     .onTapGesture { toggleControls() }
             }
             .ignoresSafeArea()
@@ -452,7 +455,7 @@ struct PlayerView: View {
 
             GlassGroup(spacing: 24) {
                 HStack(spacing: 28) {
-                    Button { c.skip(-10); scheduleHide() } label: { Image(systemName: "gobackward.10").font(.title2).frame(width: 60, height: 60) }
+                    Button { c.skip(Int32(-seekStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("gobackward", seekStep)).font(.title2).frame(width: 60, height: 60) }
                         .glass(in: Circle(), interactive: true)
                     Button { c.toggle(); scheduleHide() } label: {
                         Group {
@@ -462,7 +465,7 @@ struct PlayerView: View {
                         .frame(width: 84, height: 84)
                     }
                     .glass(in: Circle(), interactive: true)
-                    Button { c.skip(10); scheduleHide() } label: { Image(systemName: "goforward.10").font(.title2).frame(width: 60, height: 60) }
+                    Button { c.skip(Int32(seekStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("goforward", seekStep)).font(.title2).frame(width: 60, height: 60) }
                         .glass(in: Circle(), interactive: true)
                 }
             }
@@ -515,10 +518,14 @@ struct PlayerView: View {
     }
 
     private func toggleControls() { showControls.toggle(); if showControls { scheduleHide() } }
+    static func seekIcon(_ base: String, _ s: Int) -> String {
+        [5, 10, 15, 30, 45, 60].contains(s) ? "\(base).\(s)" : base
+    }
+
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(max(1, hideAfter) * 1_000_000_000))
             if !Task.isCancelled, c.isPlaying, !scrubbing, trackSheet == nil, !showOnline { showControls = false }
         }
     }
