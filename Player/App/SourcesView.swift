@@ -177,7 +177,7 @@ struct FolderView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { favs.toggle(target.source, target.dir); toast = favs.contains(target.source, target.dir) ? "已收藏，正在扫描到媒体库" : "已取消收藏" } label: {
+                    Button { favs.toggle(target.source, target.dir); toast = favs.contains(target.source, target.dir) ? "已收藏，正在扫描到媒体库" : "已取消收藏，并从媒体库移除" } label: {
                         favs.contains(target.source, target.dir) ? Label("取消收藏此文件夹", systemImage: "star.slash") : Label("收藏此文件夹", systemImage: "star")
                     }
                     if let d = target.dir {
@@ -214,7 +214,7 @@ struct FolderView: View {
         return Button {
             favs.toggle(target.source, f)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            toast = favs.contains(target.source, f) ? "已收藏，正在扫描到媒体库" : "已取消收藏"
+            toast = favs.contains(target.source, f) ? "已收藏，正在扫描到媒体库" : "已取消收藏，并从媒体库移除"
         } label: {
             Image(systemName: on ? "star.fill" : "star")
                 .font(grid ? .subheadline.weight(.semibold) : .body)
@@ -228,7 +228,7 @@ struct FolderView: View {
     }
 
     private func favButton(_ f: RemoteFile) -> some View {
-        Button { favs.toggle(target.source, f); toast = favs.contains(target.source, f) ? "已收藏，正在扫描到媒体库" : "已取消收藏" } label: {
+        Button { favs.toggle(target.source, f); toast = favs.contains(target.source, f) ? "已收藏，正在扫描到媒体库" : "已取消收藏，并从媒体库移除" } label: {
             favs.contains(target.source, f) ? Label("取消收藏", systemImage: "star.slash") : Label("收藏", systemImage: "star")
         }
     }

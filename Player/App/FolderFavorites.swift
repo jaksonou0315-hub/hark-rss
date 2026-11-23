@@ -25,7 +25,7 @@ final class FolderFavorites: ObservableObject {
 
     func contains(_ s: MediaSource, _ d: RemoteFile?) -> Bool { items.contains { $0.id == fid(s, d) } }
     func toggle(_ s: MediaSource, _ d: RemoteFile?) {
-        if contains(s, d) { items.removeAll { $0.id == fid(s, d) } }
+        if contains(s, d) { items.removeAll { $0.id == fid(s, d) }; unlink(s.id, d) }
         else {
             items.append(FavoriteFolder(sourceId: s.id, dir: d, title: d?.name ?? s.name))
             // A new favourite also goes into the media library and gets scanned right away (only the new folder).
@@ -35,7 +35,14 @@ final class FolderFavorites: ObservableObject {
         }
         save()
     }
-    func remove(_ f: FavoriteFolder) { items.removeAll { $0.id == f.id }; save() }
+    func remove(_ f: FavoriteFolder) { items.removeAll { $0.id == f.id }; unlink(f.sourceId, f.dir); save() }
+    /// 取消收藏 also takes that folder (and its films) out of the media library.
+    private func unlink(_ sid: UUID, _ d: RemoteFile?) {
+        let lib = LibraryStore.shared
+        for f in lib.folders where f.sourceId == sid && (d.map { f.dir.id == $0.id } ?? (f.dir.meta["root"] == "1")) {
+            lib.removeFolder(f)
+        }
+    }
     func move(from: IndexSet, to: Int) { items.move(fromOffsets: from, toOffset: to); save() }
     func purge(source: UUID) { items.removeAll { $0.sourceId == source }; save() }
 }
