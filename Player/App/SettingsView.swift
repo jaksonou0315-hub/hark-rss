@@ -12,6 +12,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section { StorageCard() }
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 Section {
                     HStack(spacing: 10) {
                         SettingsTile(title: "播放", icon: "slider.horizontal.3") { page = .play }
@@ -394,5 +396,94 @@ struct SourceCard: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+// MARK: - 空间占用
+
+struct StorageCard: View {
+    struct Part: Identifiable { let id: String; let color: Color; var bytes: Int64 }
+    @State private var parts: [Part] = []
+    @State private var askClear = false
+
+    private var total: Int64 { parts.reduce(0) { $0 + $1.bytes } }
+    private func fmt(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("空间占用").foregroundStyle(.secondary)
+                Spacer()
+                Text(parts.isEmpty ? "计算中…" : fmt(total)).font(.title3.monospacedDigit())
+            }
+            GeometryReader { g in
+                HStack(spacing: 3) {
+                    let shown = parts.filter { $0.bytes > 0 }
+                    let avail = g.size.width - CGFloat(max(0, shown.count - 1)) * 3
+                    ForEach(shown) { p in
+                        Rectangle().fill(p.color)
+                            .frame(width: max(4, avail * CGFloat(Double(p.bytes) / Double(max(total, 1)))))
+                    }
+                    if shown.isEmpty { Rectangle().fill(Color.secondary.opacity(0.3)) }
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 22)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), alignment: .leading)], alignment: .leading, spacing: 8) {
+                ForEach(parts) { p in
+                    HStack(spacing: 6) {
+                        Circle().fill(p.color).frame(width: 10, height: 10)
+                        Text(p.id).font(.subheadline).lineLimit(1)
+                    }
+                    .help(fmt(p.bytes))
+                }
+            }
+            Button { askClear = true } label: { Text("清理图片和临时缓存").font(.footnote) }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+        .task { await measure() }
+        .confirmationDialog("清理图片缓存和临时文件？下载和媒体库不受影响。", isPresented: $askClear, titleVisibility: .visible) {
+            Button("清理", role: .destructive) {
+                URLCache.shared.removeAllCachedResponses()
+                let fm = FileManager.default
+                for d in [fm.temporaryDirectory, fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]] {
+                    for u in (try? fm.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? [] { try? fm.removeItem(at: u) }
+                }
+                Task { await measure() }
+            }
+        }
+    }
+
+    private func measure() async {
+        let r = await Task.detached(priority: .utility) { () -> [Part] in
+            let fm = FileManager.default
+            func size(_ u: URL) -> Int64 {
+                var t: Int64 = 0
+                guard let e = fm.enumerator(at: u, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]) else { return 0 }
+                for case let f as URL in e {
+                    let v = try? f.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey])
+                    if v?.isRegularFile == true { t += Int64(v?.totalFileAllocatedSize ?? 0) }
+                }
+                return t
+            }
+            let home = URL(fileURLWithPath: NSHomeDirectory())
+            let sup = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let all = size(home)
+            let video = size(fm.temporaryDirectory)
+            let images = size(caches)
+            let downloads = size(sup.appendingPathComponent("Downloads"))
+            let ai = size(sup.appendingPathComponent("Models")) + size(sup.appendingPathComponent("Fonts"))
+            let lib = ["library.json", "tmdb-cache.json", "scan"].reduce(Int64(0)) { $0 + size(sup.appendingPathComponent($1)) }
+                + ((try? fm.attributesOfItem(atPath: sup.appendingPathComponent("library.json").path)[.size] as? Int64) ?? 0) * 0
+            let other = max(0, all - video - images - downloads - ai - lib)
+            return [Part(id: "视频", color: .indigo, bytes: video), Part(id: "图片", color: .orange, bytes: images),
+                    Part(id: "资源库", color: .blue, bytes: lib), Part(id: "下载", color: .green, bytes: downloads),
+                    Part(id: "AI 模型", color: .cyan, bytes: ai), Part(id: "其他", color: .gray, bytes: other)]
+        }.value
+        parts = r
     }
 }
