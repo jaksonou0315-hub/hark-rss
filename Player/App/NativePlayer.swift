@@ -227,13 +227,13 @@ struct NativePlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: showClose)
-        .onAppear { scheduleHide() }
+        .onAppear { scheduleHide(); OrientationLock.set(.allButUpsideDown) }
         .preferredColorScheme(.dark)
         .animation(.easeInOut, value: m.showBadges)
         .task { await m.start() }
-        .onDisappear { m.stop() }
+        .onDisappear { m.stop(); OrientationLock.set(.portrait, force: .portrait) }
     }
-    private func close() { m.stop(); dismiss() }
+    private func close() { m.stop(); OrientationLock.leavePlayer { dismiss() } }
 
     @State private var showClose = true
     @State private var hideTask: Task<Void, Never>?

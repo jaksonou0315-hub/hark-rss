@@ -383,7 +383,8 @@ struct PlayerView: View {
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
         .task { await c.start(); scheduleHide() }
-        .onDisappear { c.stop(); setOrientation(portrait: true) }
+        .onAppear { OrientationLock.set(.allButUpsideDown) }
+        .onDisappear { c.stop(); OrientationLock.set(.portrait, force: .portrait) }
         .onChange(of: c.ended) { _, ended in if ended { close() } }
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }
         .animation(.easeInOut(duration: 0.2), value: showControls)
@@ -513,11 +514,10 @@ struct PlayerView: View {
         }
     }
     private func flash(_ s: String) { c.toast = s }
-    private func close() { c.stop(); dismiss() }
+    private func close() { c.stop(); OrientationLock.leavePlayer { dismiss() } }
 
     private func setOrientation(portrait: Bool) {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: portrait ? .portrait : .landscapeRight)) { _ in }
+        OrientationLock.set(.allButUpsideDown, force: portrait ? .portrait : .landscapeRight)
     }
 }
 

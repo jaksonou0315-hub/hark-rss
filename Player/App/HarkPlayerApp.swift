@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct HarkPlayerApp: App {
+    @UIApplicationDelegateAdaptor(OrientationDelegate.self) private var orientationDelegate
     @StateObject private var sources = SourceStore.shared
     @StateObject private var library = LibraryStore.shared
     @StateObject private var router = PlaybackRouter.shared
@@ -62,5 +63,34 @@ struct RootView: View {
         .fullScreenCover(item: $router.request) { r in
             PlayerEntry(request: r)
         }
+    }
+}
+
+
+/// Library and settings stay portrait on iPhone; only the player unlocks landscape.
+enum OrientationLock {
+    static var mask: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
+    @MainActor static func set(_ m: UIInterfaceOrientationMask, force: UIInterfaceOrientationMask? = nil) {
+        if UIDevice.current.userInterfaceIdiom == .pad { return }
+        mask = m
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for w in scene.windows { w.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations() }
+            if let f = force { scene.requestGeometryUpdate(.iOS(interfaceOrientations: f)) { _ in } }
+        }
+    }
+    @MainActor static var isLandscape: Bool {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.interfaceOrientation.isLandscape ?? false
+    }
+    /// Rotate back to portrait first, then run `then` (the dismiss) once the rotation has settled.
+    @MainActor static func leavePlayer(_ then: @escaping () -> Void) {
+        let wasLand = isLandscape
+        set(.portrait, force: .portrait)
+        if wasLand { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: then) } else { then() }
+    }
+}
+
+final class OrientationDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        OrientationLock.mask
     }
 }
