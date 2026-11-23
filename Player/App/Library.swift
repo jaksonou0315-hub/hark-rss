@@ -184,19 +184,34 @@ final class LibraryStore: ObservableObject {
                 && !(it.files.allSatisfy { prefetchOff.contains($0.sourceId) })
         }
         var changed = 0
+        var pending: [String: TMDBDetails] = [:]
+        var lastFlush = Date()
+        // Apply fetched details in batches: one publish per batch instead of six per film
+        // (each publish re-rendered Home and froze scrolling while 数据同步中).
+        func flush() {
+            guard !pending.isEmpty else { return }
+            var xs = items
+            for i in xs.indices {
+                guard let d = pending[xs[i].id] else { continue }
+                if !d.genres.isEmpty { xs[i].genres = d.genres }
+                xs[i].certification = d.certification ?? ""
+                xs[i].countries = d.countries
+                xs[i].keywords = d.keywords
+                xs[i].collectionId = d.collectionId; xs[i].collectionName = d.collectionName; xs[i].collectionPoster = d.collectionPoster
+                xs[i].regions = d.regionCodes; xs[i].lang = d.lang
+            }
+            pending = [:]; lastFlush = Date()
+            items = xs
+        }
         for it in todo {
             await AppActivity.shared.waitUntilActive()
             guard let id = it.tmdbId, let d = await TMDB.details(id: id, tv: it.isTV) else { continue }
-            guard let i = items.firstIndex(where: { $0.id == it.id }) else { continue }
-            if !d.genres.isEmpty { items[i].genres = d.genres }
-            items[i].certification = d.certification ?? ""
-            items[i].countries = d.countries
-            items[i].keywords = d.keywords
-            items[i].collectionId = d.collectionId; items[i].collectionName = d.collectionName; items[i].collectionPoster = d.collectionPoster
-            items[i].regions = d.regionCodes; items[i].lang = d.lang
+            pending[it.id] = d
             changed += 1
-            if changed % 20 == 0 { save() }
+            if pending.count >= 60 || Date().timeIntervalSince(lastFlush) > 4 { flush() }
+            if changed % 120 == 0 { save() }
         }
+        flush()
         if changed > 0 { save() }
         TMDBCache.shared.flush()
     }

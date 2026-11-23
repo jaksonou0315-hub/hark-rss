@@ -92,12 +92,38 @@ struct FolderView: View {
     @ObservedObject private var favs = FolderFavorites.shared
 
     private var smart: Bool { currentSource.extra["smartFolders"] == "1" }
+    @State private var smartMap: [String: LibraryItem] = [:]
     private func smartItem(_ f: RemoteFile) -> LibraryItem? {
         guard smart, f.isDir else { return nil }
-        let t = NameParser.parse(f.name, parents: []).title.lowercased()
-        guard !t.isEmpty else { return nil }
-        return library.items.first { $0.title.lowercased() == t || ($0.originalTitle ?? "").lowercased() == t }
-            ?? library.items.first { it in it.files.contains { $0.sourceId == currentSource.id && $0.file.meta["folder"] != nil && $0.file.path.contains("/\(f.name)/") } }
+        return smartMap[f.id]
+    }
+    /// Matches folders to library items once per listing / library change, off the main thread
+    /// (it used to run for every row on every redraw and froze the browser during scans).
+    private func rebuildSmartMap() async {
+        guard smart else { smartMap = [:]; return }
+        let dirs = files.filter(\.isDir)
+        guard !dirs.isEmpty else { smartMap = [:]; return }
+        let items = library.items
+        let sid = currentSource.id
+        let map = await Task.detached(priority: .userInitiated) { () -> [String: LibraryItem] in
+            var byTitle: [String: LibraryItem] = [:]
+            for it in items {
+                let a = it.title.lowercased(); if byTitle[a] == nil { byTitle[a] = it }
+                if let o = it.originalTitle?.lowercased(), byTitle[o] == nil { byTitle[o] = it }
+            }
+            var out: [String: LibraryItem] = [:]
+            for f in dirs {
+                let t = NameParser.parse(f.name, parents: []).title.lowercased()
+                guard !t.isEmpty else { continue }
+                if let it = byTitle[t] { out[f.id] = it; continue }
+                let needle = "/\(f.name)/"
+                if let it = items.first(where: { it in it.files.contains { $0.sourceId == sid && $0.file.meta["folder"] != nil && $0.file.path.contains(needle) } }) {
+                    out[f.id] = it
+                }
+            }
+            return out
+        }.value
+        smartMap = map
     }
 
     private var visible: [RemoteFile] { showAll ? files : files.filter { $0.isDir || $0.isVideo } }
@@ -188,6 +214,8 @@ struct FolderView: View {
             }
         }
         .task { await load() }
+        .task(id: files.count) { await rebuildSmartMap() }
+        .onReceive(library.$items.debounce(for: .seconds(3), scheduler: RunLoop.main)) { _ in Task { await rebuildSmartMap() } }
         .navigationDestination(item: $pushDir) { d in FolderView(target: BrowseTarget(source: target.source, dir: d)) }
     }
 

@@ -73,19 +73,41 @@ enum Groupings {
         }
     }
     private static let catKey = "lib.category"
+    // In-memory copies: reading UserDefaults per item per rebuild was a big part of the scan-time lag.
+    nonisolated(unsafe) private static var catCache: [String: String]?
+    nonisolated(unsafe) private static var blCache: [String: String]?
+    nonisolated(unsafe) private static var autoMemo: [String: (String, Category)] = [:]
+    private static let memoLock = NSLock()
+    private static func catDict() -> [String: String] {
+        memoLock.lock(); defer { memoLock.unlock() }
+        if let c = catCache { return c }
+        let c = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
+        catCache = c; return c
+    }
+    private static func blDict() -> [String: String] {
+        memoLock.lock(); defer { memoLock.unlock() }
+        if let c = blCache { return c }
+        let c = (UserDefaults.standard.dictionary(forKey: blSubKey) as? [String: String]) ?? [:]
+        blCache = c; return c
+    }
+    static func invalidateCaches() {
+        memoLock.lock(); catCache = nil; blCache = nil; autoMemo = [:]; memoLock.unlock()
+    }
     static func categoryOverride(_ id: String) -> Category? {
-        ((UserDefaults.standard.dictionary(forKey: catKey) as? [String: String])?[id]).flatMap(Category.init(rawValue:))
+        catDict()[id].flatMap(Category.init(rawValue:))
     }
     @MainActor static func setCategory(_ ids: [String], _ c: Category?) {
         var d = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
         for id in ids { d[id] = c?.rawValue }
         UserDefaults.standard.set(d, forKey: catKey)
+        invalidateCaches()
         NotificationCenter.default.post(name: .categoryChanged, object: nil)
     }
     @MainActor static func setCategory(_ id: String, _ c: Category?) {
         var d = (UserDefaults.standard.dictionary(forKey: catKey) as? [String: String]) ?? [:]
         d[id] = c?.rawValue
         UserDefaults.standard.set(d, forKey: catKey)
+        invalidateCaches()
         NotificationCenter.default.post(name: .categoryChanged, object: nil)
     }
     /// BL 子分类：电影 / 电视剧 / 短剧 / 动画 / 综艺
@@ -144,7 +166,7 @@ enum Groupings {
     }
     private static let blSubKey = "lib.blsub"
     static func blSubOverride(_ id: String) -> BLSub? {
-        ((UserDefaults.standard.dictionary(forKey: blSubKey) as? [String: String])?[id]).flatMap(BLSub.init(rawValue:))
+        blDict()[id].flatMap(BLSub.init(rawValue:))
     }
     static func autoBLSub(_ i: LibraryItem) -> BLSub {
         switch autoCategory(i, ignoreBL: true) {
@@ -167,10 +189,21 @@ enum Groupings {
             for id in ids { cd[id] = Category.bl.rawValue }
             UserDefaults.standard.set(cd, forKey: catKey)
         }
+        invalidateCaches()
         NotificationCenter.default.post(name: .categoryChanged, object: nil)
     }
 
     static func autoCategory(_ i: LibraryItem, ignoreBL: Bool = false) -> Category {
+        // Regex-heavy, so memoise per item; the signature changes whenever the inputs do.
+        let sig = "\(ignoreBL)|\(i.title)|\(i.originalTitle ?? "")|\(i.tmdbId ?? 0)|\(i.kind)|\(i.keywords?.count ?? -1)|\(i.genres?.joined() ?? "")|\(i.files.count)|\(i.files.first?.id ?? "")"
+        let key = (ignoreBL ? "b:" : "a:") + i.id
+        memoLock.lock(); let hit = autoMemo[key]; memoLock.unlock()
+        if let hit, hit.0 == sig { return hit.1 }
+        let c = autoCategoryUncached(i, ignoreBL: ignoreBL)
+        memoLock.lock(); autoMemo[key] = (sig, c); memoLock.unlock()
+        return c
+    }
+    private static func autoCategoryUncached(_ i: LibraryItem, ignoreBL: Bool) -> Category {
         if !ignoreBL && autoBL(i) { return .bl }
         if matches(i, concertRegex) || (i.keywords ?? []).contains(where: { concertKeywords.contains($0) }) { return .concert }
         if matches(i, shortRegex) || (i.keywords ?? []).contains(where: { k in shortKeywords.contains(k) || (k.hasPrefix("net:") && shortPlatforms.contains { k.contains($0) }) }) { return .shortDrama }
@@ -412,7 +445,7 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1; rebuild() }
-            .onReceive(library.$items.debounce(for: .seconds(0.8), scheduler: RunLoop.main)) { _ in rebuild() }
+            .onReceive(library.$items.debounce(for: .seconds(1.5), scheduler: RunLoop.main)) { _ in rebuild() }
             .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in rebuild() }
             .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
             .onAppear { rebuild() }
