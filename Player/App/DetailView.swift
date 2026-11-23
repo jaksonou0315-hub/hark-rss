@@ -401,14 +401,16 @@ struct DetailView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(item.files) { f in
-                        Button { play(f, item) } label: {
+                        let on = (pickedEp ?? item.files.first?.id) == f.id
+                        Button { withAnimation(.easeInOut(duration: 0.15)) { pickedEp = f.id } } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(f.file.name).font(.footnote.weight(.semibold)).lineLimit(2)
                                 Text([sources.source(f.sourceId)?.name ?? "", f.file.sizeText].filter { !$0.isEmpty }.joined(separator: " · "))
                                     .font(.caption2).foregroundStyle(.white.opacity(0.7))
                             }
                             .padding(12).frame(width: 220, alignment: .leading)
-                            .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(.white.opacity(on ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay { if on { RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white, lineWidth: 2) } }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -696,6 +698,7 @@ struct DetailView: View {
             let eps = item.episodes(season: season ?? item.seasons.first)
             return eps.first { !marks.watched.contains($0.id) } ?? eps.first
         }
+        if let p = pickedEp, let f = item.files.first(where: { $0.id == p }) { return f }
         return item.files.first
     }
 
