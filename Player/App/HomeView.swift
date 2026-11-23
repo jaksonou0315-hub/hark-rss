@@ -145,7 +145,7 @@ enum Groupings {
     static func regionTabs(_ title: String) -> [(String, Set<Region>)]? {
         switch title {
         case "电影":
-            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("泰国电影", [.th]), ("其他", [.sea, .other])]
+            return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("东南亚电影", [.th, .sea]), ("其他", [.other])]
         case "动画电影":
             return [("华语电影", [.cn, .hk, .tw]), ("日韩电影", [.jp, .kr]), ("欧美电影", [.west]), ("其他", [.th, .sea, .other])]
         case "电视剧":
