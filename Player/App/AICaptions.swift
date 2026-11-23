@@ -355,7 +355,7 @@ struct LiveCaptionOverlay: View {
     @ObservedObject private var style = SubtitleStyle.shared
     private func f(_ size: Double, _ w: Font.Weight) -> Font {
         let sz = size * style.scale / 100
-        let wt: Font.Weight = style.bold ? .bold : w
+        let wt: Font.Weight = [w, .semibold, .bold, .heavy][max(0, min(3, style.weight))]
         return style.font.isEmpty ? .system(size: sz, weight: wt) : .custom(style.font, size: sz).weight(wt)
     }
     var body: some View {

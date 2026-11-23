@@ -13,7 +13,11 @@ final class SubtitleStyle: ObservableObject {
     @Published var color: Int { didSet { d.set(color, forKey: "subStyle.color") } }
     /// 50 ... 200 (%)
     @Published var scale: Double { didSet { d.set(scale, forKey: "subStyle.scale") } }
-    @Published var bold: Bool { didSet { d.set(bold, forKey: "subStyle.bold") } }
+    /// 0 常规, 1 中粗, 2 粗, 3 特粗. Player engines only have bold on/off (on from 粗); AI captions use every step.
+    @Published var weight: Int { didSet { d.set(weight, forKey: "subStyle.weight") } }
+    var bold: Bool { weight >= 2 }
+    static let weightNames = ["常规", "中粗", "粗", "特粗"]
+    static let outlineNames = ["无", "细", "中", "粗"]
     /// 0 none, 1 thin, 2 normal, 3 thick
     @Published var outline: Int { didSet { d.set(outline, forKey: "subStyle.outline") } }
     @Published var background: Bool { didSet { d.set(background, forKey: "subStyle.bg") } }
@@ -33,7 +37,7 @@ final class SubtitleStyle: ObservableObject {
     private init() {
         color = d.object(forKey: "subStyle.color") as? Int ?? 0xFFFFFF
         scale = d.object(forKey: "subStyle.scale") as? Double ?? 100
-        bold = d.object(forKey: "subStyle.bold") as? Bool ?? false
+        weight = d.object(forKey: "subStyle.weight") as? Int ?? ((d.object(forKey: "subStyle.bold") as? Bool ?? false) ? 2 : 0)
         outline = d.object(forKey: "subStyle.outline") as? Int ?? 2
         background = d.object(forKey: "subStyle.bg") as? Bool ?? false
         backgroundOpacity = d.object(forKey: "subStyle.bgOpacity") as? Double ?? 0.5
@@ -133,7 +137,7 @@ final class SubtitleStyle: ObservableObject {
     }
 
     func reset() {
-        color = 0xFFFFFF; scale = 100; bold = false; outline = 2; background = false; backgroundOpacity = 0.5; font = ""
+        color = 0xFFFFFF; scale = 100; weight = 0; outline = 2; background = false; backgroundOpacity = 0.5; font = ""
     }
 }
 
@@ -168,18 +172,14 @@ struct SubtitleStyleEditor: View {
                     }), supportsOpacity: false).labelsHidden()
                 }
             }
-            VStack(alignment: .leading) {
-                Text(verbatim: "大小 \(Int(style.scale))%")
-                Slider(value: $style.scale, in: 50...200, step: 10)
-            }
-            Picker("粗细", selection: $style.bold) { Text("常规").tag(false); Text("粗体").tag(true) }
-            Picker("描边", selection: $style.outline) { Text("无").tag(0); Text("细").tag(1); Text("中").tag(2); Text("粗").tag(3) }
+            FillSlider(title: "字幕大小", value: $style.scale, range: 50...200, step: 10) { "\(Int($0))%" }
+            FillSlider(title: "粗细", value: Binding(get: { Double(style.weight) }, set: { style.weight = Int($0.rounded()) }),
+                       range: 0...3, step: 1) { SubtitleStyle.weightNames[max(0, min(3, Int($0.rounded())))] }
+            FillSlider(title: "描边", value: Binding(get: { Double(style.outline) }, set: { style.outline = Int($0.rounded()) }),
+                       range: 0...3, step: 1) { SubtitleStyle.outlineNames[max(0, min(3, Int($0.rounded())))] }
             Toggle("字幕背景", isOn: $style.background)
             if style.background {
-                VStack(alignment: .leading) {
-                    Text(verbatim: "背景不透明度 \(Int(style.backgroundOpacity * 100))%")
-                    Slider(value: $style.backgroundOpacity, in: 0.1...1, step: 0.05)
-                }
+                FillSlider(title: "背景不透明度", value: $style.backgroundOpacity, range: 0.1...1, step: 0.05) { "\(Int(($0 * 100).rounded()))%" }
             }
             Picker("字体", selection: $style.font) {
                 Text("系统默认").tag("")
@@ -250,5 +250,61 @@ struct ThinScrubber: View {
                 })
         }
         .frame(height: 28)
+    }
+}
+
+
+/// Capsule slider that fills from the left as you drag right: title on the left, value on the right.
+struct FillSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 0
+    let label: (Double) -> String
+    @State private var dragging = false
+
+    private var frac: Double { (value - range.lowerBound) / (range.upperBound - range.lowerBound) }
+
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.12))
+                Capsule().fill(Color.white.opacity(dragging ? 0.95 : 0.85))
+                    .frame(width: max(g.size.height, g.size.width * frac))
+                HStack {
+                    Text(title)
+                    Spacer()
+                    Text(label(value)).monospacedDigit()
+                }
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 16)
+                .foregroundStyle(.white)
+                .blendMode(.difference)
+            }
+            .compositingGroup()
+            .contentShape(Capsule())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    dragging = true
+                    let f = max(0, min(1, v.location.x / max(1, g.size.width)))
+                    var nv = range.lowerBound + f * (range.upperBound - range.lowerBound)
+                    if step > 0 { nv = (nv / step).rounded() * step }
+                    nv = max(range.lowerBound, min(range.upperBound, nv))
+                    if nv != value {
+                        value = nv
+                        if step > 0 { UISelectionFeedbackGenerator().selectionChanged() }
+                    }
+                }
+                .onEnded { _ in dragging = false })
+        }
+        .frame(height: 44)
+        .animation(.interactiveSpring(response: 0.2), value: value)
+        .accessibilityElement()
+        .accessibilityLabel(title)
+        .accessibilityValue(label(value))
+        .accessibilityAdjustableAction { dir in
+            let st = step > 0 ? step : (range.upperBound - range.lowerBound) / 20
+            value = max(range.lowerBound, min(range.upperBound, value + (dir == .increment ? st : -st)))
+        }
     }
 }
