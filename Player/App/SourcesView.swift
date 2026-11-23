@@ -157,6 +157,7 @@ struct FolderView: View {
                                 }
                                 if opening == f.id { Spacer(); ProgressView() }
                             }
+                            .padding(.trailing, f.isDir ? 40 : 0)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .overlay(alignment: .trailing) { if f.isDir { starButton(f, grid: false) } }
