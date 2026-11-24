@@ -359,12 +359,12 @@ final class ScanCenter: ObservableObject {
         }
         }
         // Per-source QPS limit (编辑文件源 › 高级 › QPS 限制) overrides the defaults.
-        var ms = ms
-        if let q = Double(s.extra["qps"] ?? ""), q > 0 { ms = max(ms == 0 ? 0 : 0, Int(1000 / q)) }
-        if let g = gates[s.id], gateMs[s.id] == ms { return g }
-        let g = SourceGate(minDelayMs: ms)
+        var delay = ms
+        if let q = Double(s.extra["qps"] ?? ""), q > 0 { delay = Int(1000 / q) }
+        if let g = gates[s.id], gateMs[s.id] == delay { return g }
+        let g = SourceGate(minDelayMs: delay)
         gates[s.id] = g
-        gateMs[s.id] = ms
+        gateMs[s.id] = delay
         return g
     }
     func db(_ id: UUID) -> SnapshotDB {
