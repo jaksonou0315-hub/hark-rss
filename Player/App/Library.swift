@@ -66,6 +66,7 @@ final class LibraryStore: ObservableObject {
         set { if live.progress != newValue { live.progress = newValue } }
     }
     @Published var lastResult: String?
+    @Published var dirScan: String?          // 单个文件夹重新扫描时顶部胶囊显示
     @Published var lastScan: Date? = UserDefaults.standard.object(forKey: "lib.lastScan") as? Date
     private var rescanPending = false
     private var pendingForce = false
@@ -629,9 +630,11 @@ final class LibraryStore: ObservableObject {
         guard !source.kind.isMediaServer else { await scan(force: true); return }
         let name = dir?.name ?? source.name
         progress = "正在重新扫描 \(name)…"
-        defer { progress = "" }
+        dirScan = "重新扫描「\(name)」"
+        lastResult = nil
+        defer { progress = ""; dirScan = nil }
         let center = ScanCenter.shared
-        let run = CrawlRunHandle.make(center: center, source: source, db: center.db(source.id), gate: center.gate(source), force: true) { [weak self] m in self?.progress = m }
+        let run = CrawlRunHandle.make(center: center, source: source, db: center.db(source.id), gate: center.gate(source), force: true) { [weak self] m in self?.progress = m; self?.dirScan = "重新扫描「\(name)」"; self?.live.line = m }
         await run(dir)
         center.db(source.id).flush()
         let before = Set(items.map(\.id))
@@ -647,6 +650,11 @@ final class LibraryStore: ObservableObject {
         next.insert(contentsOf: built.filter { touched.contains($0.id) }, at: 0)
         items = next
         save()
+        let nb = built.filter { touched.contains($0.id) }
+        let nFiles = nb.reduce(0) { $0 + $1.files.count }
+        let nNew = nb.filter { !before.contains($0.id) }.count
+        live.line = nil
+        lastResult = "「\(name)」重新扫描完成：\(nFiles) 个视频文件，\(nb.count) 部影片，新增 \(nNew) 部（媒体库共 \(items.count) 部）"
         for it in built where touched.contains(it.id) {
             if !before.contains(it.id) && it.tmdbId == nil, overrides[it.id] == nil {
                 progress = "正在匹配海报：\(it.title)"

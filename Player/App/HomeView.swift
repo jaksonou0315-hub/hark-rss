@@ -363,7 +363,7 @@ struct HomeShelves {
         h.cont = Groupings.continueWatching(items)
         h.nMovies = h.movies.count + h.animeMovies.count
         h.nShows = h.shows.count + h.anime.count + h.variety.count
-        h.nOther = h.other.count
+        h.nOther = items.count - h.nMovies - h.nShows   // 纪录片/BL/短剧/演唱会/其他 都算进来，三格加起来 = 影片总数
         return h
     }
 }
@@ -469,10 +469,10 @@ struct HomeView: View {
 
     private var topBar: some View {
         HStack {
-            if library.scanning || library.enrichLeft > 0 {
+            if library.scanning || library.dirScan != nil || library.enrichLeft > 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "play.fill").foregroundStyle(.green)
-                    Text(library.scanning ? "数据同步中" : "补全分类 剩余 \(library.enrichLeft)").font(.subheadline.weight(.medium)).monospacedDigit()
+                    Text(library.scanning ? "数据同步中" : library.dirScan ?? "补全分类 剩余 \(library.enrichLeft)").font(.subheadline.weight(.medium)).monospacedDigit()
                     ProgressView().controlSize(.small).tint(.green)
                 }
                 .padding(.horizontal, 16).frame(height: 44)
@@ -494,8 +494,8 @@ struct HomeView: View {
     }
 
     @ViewBuilder private var banners: some View {
-        if let r = library.lastResult, !library.scanning, r.hasPrefix("扫描失败") || r.contains("没在") {
-            Label(r, systemImage: "exclamationmark.triangle").font(.footnote).padding(12)
+        if let r = library.lastResult, !library.scanning, library.dirScan == nil, r.hasPrefix("扫描失败") || r.contains("没在") || r.hasPrefix("「") {
+            Label(r, systemImage: r.hasPrefix("「") ? "checkmark.circle" : "exclamationmark.triangle").font(.footnote).padding(12)
                 .background(HomeStyle.card, in: RoundedRectangle(cornerRadius: 14))
                 .padding(.horizontal, 16)
                 .onTapGesture { library.lastResult = nil }
@@ -587,6 +587,8 @@ struct HomeView: View {
                 statTile("电视剧", shows, Color(red: 0.30, green: 0.62, blue: 0.45), "tv")
                 statTile("其他", other, Color(red: 0.62, green: 0.48, blue: 0.32), "square.grid.2x2")
             }
+            Text("共 \(library.items.count) 部影片 · \(library.items.reduce(0) { $0 + $1.files.count }) 个视频文件")
+                .font(.footnote).foregroundStyle(.white.opacity(0.6)).monospacedDigit()
             if let d = library.lastScan {
                 Text("上次更新时间：\(d.formatted(.dateTime.year().month().day().hour().minute()))")
                     .font(.footnote).foregroundStyle(.white.opacity(0.6))

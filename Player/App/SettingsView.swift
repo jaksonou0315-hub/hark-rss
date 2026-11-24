@@ -68,6 +68,7 @@ struct SettingsView: View {
 
                 Section("媒体库") {
                     LabeledContent("影片数量", value: "\(library.items.count)")
+                    LabeledContent("视频文件", value: "\(library.items.reduce(0) { $0 + $1.files.count })")
                     Button("完整重新扫描") { Task { await library.scan(force: true) } }
                     NavigationLink("扫描诊断") { ScanDiagnosticsView() }
                     NavigationLink("下载管理") { DownloadsView() }
