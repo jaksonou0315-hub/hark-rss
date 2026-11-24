@@ -403,9 +403,12 @@ struct HomeView: View {
     /// While 数据同步中 the items change every few seconds; rebuilding every shelf that often recreated the
     /// tiles under the finger and cancelled taps (nothing opened). During a scan rebuild at most every 15 s.
     private func rebuild(force: Bool = false) {
+        // Long-press menu open (or just closing): swapping the shelves under it made the lift/dismiss stutter.
+        if MenuGate.busy { MenuGate.pending = true; return }
         if !force, library.scanning || library.dirScan != nil || library.enrichLeft > 0, Date().timeIntervalSince(lastBuild) < 15 { return }
         lastBuild = Date()
-        shelves = HomeShelves.build(library.items, marks: marks)
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { shelves = HomeShelves.build(library.items, marks: marks) }
     }
 
     var body: some View {
@@ -467,7 +470,12 @@ struct HomeView: View {
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1; rebuild() }
             .onReceive(library.$items.debounce(for: .seconds(1.5), scheduler: RunLoop.main)) { _ in rebuild() }
-            .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in rebuild(force: true) }
+            .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in
+                MenuGate.pending = true; MenuGate.flushSoon()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .menuGateFlush)) { _ in
+                if MenuGate.pending, !MenuGate.busy { MenuGate.pending = false; rebuild(force: true) }
+            }
             .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
             .onAppear { rebuild(force: true) }
             .onChange(of: library.scanning) { _, v in if !v { rebuild(force: true) } }
@@ -760,7 +768,26 @@ struct HeroCarousel: View {
 
 // MARK: - Cards
 
-extension Notification.Name { static let categoryChanged = Notification.Name("lib.categoryChanged") }
+extension Notification.Name {
+    static let categoryChanged = Notification.Name("lib.categoryChanged")
+    static let menuGateFlush = Notification.Name("home.menuGateFlush")
+}
+
+/// Holds home shelf rebuilds while a tile's long-press menu is up and through its dismiss animation.
+@MainActor enum MenuGate {
+    static var openedAt: Date?
+    static var closedAt = Date.distantPast
+    static var pending = false
+    static var busy: Bool {
+        if let o = openedAt, Date().timeIntervalSince(o) < 20 { return true }   // 20 s safety cap
+        return Date().timeIntervalSince(closedAt) < 0.5
+    }
+    static func open() { openedAt = Date() }
+    static func close() { openedAt = nil; closedAt = Date(); flushSoon() }
+    static func flushSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { NotificationCenter.default.post(name: .menuGateFlush, object: nil) }
+    }
+}
 
 /// 「移到分类」菜单：长按海报，或详情页 ⋯
 struct CategoryMenuItems: View {
@@ -813,8 +840,12 @@ extension View {
         // Lift in place (no custom preview, which iOS centres on screen); preview shape = the tile itself.
         self.contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contextMenu {
-                if Groupings.isBL(item) { BLSubMenuItems(item: item) }
-                CategoryMenuItems(item: item, flat: true)
+                Group {
+                    if Groupings.isBL(item) { BLSubMenuItems(item: item) }
+                    CategoryMenuItems(item: item, flat: true)
+                }
+                .onAppear { MenuGate.open() }
+                .onDisappear { MenuGate.close() }
             }
     }
 }
