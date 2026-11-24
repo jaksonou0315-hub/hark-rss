@@ -197,6 +197,7 @@ final class AppSettings: ObservableObject {
     @Published var translateTarget: String { didSet { d.set(translateTarget, forKey: "trTarget") } }
     @Published var bilingualSubs: Bool { didSet { d.set(bilingualSubs, forKey: "bilingual") } }
     @Published var nativeEngine: Bool { didSet { d.set(nativeEngine, forKey: "nativeEngine") } }
+    @Published var nativeRemux: Bool { didSet { d.set(nativeRemux, forKey: "nativeRemux") } }
     @Published var dolbyStereo: Bool { didSet { d.set(dolbyStereo, forKey: "dolbyStereo") } }
     @Published var mkvEngine: EngineKind = EngineKind(rawValue: UserDefaults.standard.string(forKey: "mkvEngine") ?? "") ?? .auto {
         didSet { d.set(mkvEngine.rawValue, forKey: "mkvEngine") }
@@ -218,6 +219,7 @@ final class AppSettings: ObservableObject {
         translateTarget = d.string(forKey: "trTarget") ?? "zh-Hans"
         bilingualSubs = d.object(forKey: "bilingual") as? Bool ?? true
         nativeEngine = d.object(forKey: "nativeEngine") as? Bool ?? true
+        nativeRemux = d.object(forKey: "nativeRemux") as? Bool ?? true
         dolbyStereo = d.object(forKey: "dolbyStereo") as? Bool ?? true
     }
 }

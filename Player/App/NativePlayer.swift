@@ -5,32 +5,42 @@ import AVFoundation
 import Combine
 
 /// Apple-native engine (AVPlayer) for MP4/MOV/M4V over http(s)/file: system Dolby Vision, HDR10, Dolby Atmos (E-AC-3 JOC) and spatial audio.
+enum PlayMode { case native, remux, other }
+
 enum EngineChooser {
     static let nativeExts: Set<String> = ["mp4", "m4v", "mov"]
-    static func useNative(_ r: PlayRequest) -> Bool {
-        guard AppSettings.shared.nativeEngine else { return false }
-        guard r.source.kind != .smb else { return false }
-        guard !badNative.contains(r.file.id) else { return false }
-        return nativeExts.contains(r.file.ext)
+    static let remuxExts: Set<String> = ["mkv", "mp4", "m4v", "mov", "ts", "m2ts", "webm"]
+    static func mode(_ r: PlayRequest) -> PlayMode {
+        guard AppSettings.shared.nativeEngine, r.source.kind != .smb else { return .other }
+        let ext = r.file.ext
+        if nativeExts.contains(ext), !badNative.contains(r.file.id) { return .native }
+        if remuxExts.contains(ext), AppSettings.shared.nativeRemux, !badRemux.contains(r.file.id) { return .remux }
+        return .other
     }
-    /// Files AVPlayer opened but could not draw (e.g. HEVC tagged hev1, unsupported codec): play them with VLC/MPV from now on.
+    static func useNative(_ r: PlayRequest) -> Bool { mode(r) != .other }
+    /// Files AVPlayer opened but could not draw (e.g. HEVC tagged hev1): next time go straight to the remux path.
     static var badNative: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "native.bad") ?? [])
-    static func markBad(_ id: String) {
-        badNative.insert(id)
-        UserDefaults.standard.set(Array(badNative.suffix(500)), forKey: "native.bad")
+    static var badRemux: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "remux.bad") ?? [])
+    static func markBad(_ id: String, _ m: PlayMode) {
+        if m == .native { badNative.insert(id); UserDefaults.standard.set(Array(badNative.suffix(500)), forKey: "native.bad") }
+        if m == .remux { badRemux.insert(id); UserDefaults.standard.set(Array(badRemux.suffix(500)), forKey: "remux.bad") }
     }
 }
 
 struct PlayerEntry: View {
     let request: PlayRequest
     @State private var current: PlayRequest?
-    @State private var fellBack: Set<String> = []
+    @State private var tick = 0
     var body: some View {
         let r = current ?? request
-        if EngineChooser.useNative(r) && !fellBack.contains(r.file.id) {
-            NativePlayerView(request: r, onFallback: { EngineChooser.markBad(r.file.id); fellBack.insert(r.file.id) }).id(r.id)
-        }
-        else { PlayerView(request: r, onNext: { current = $0 }).id(r.id) }
+        let m = EngineChooser.mode(r)
+        Group {
+            if m == .other { PlayerView(request: r, onNext: { current = $0 }).id(r.id) }
+            else {
+                NativePlayerView(request: r, remux: m == .remux, onFallback: { EngineChooser.markBad(r.file.id, m); tick += 1 })
+                    .id("\(r.id)-\(m == .remux)")
+            }
+        }.background(Text("\(tick)").hidden())
     }
 }
 
@@ -91,6 +101,8 @@ enum DolbyBadges {
 @MainActor
 final class NativePlayerModel: ObservableObject {
     let request: PlayRequest
+    let remux: Bool
+    private var remuxId: String?
     let player = AVPlayer()
     @Published var errorText: String?
     /// set when AVPlayer has a video track it cannot draw; the view hands the file to VLC/MPV
@@ -102,7 +114,7 @@ final class NativePlayerModel: ObservableObject {
     private var endObs: NSObjectProtocol?
     private var styleSub: AnyCancellable?
 
-    init(_ r: PlayRequest) { request = r }
+    init(_ r: PlayRequest, remux: Bool) { request = r; self.remux = remux }
 
     func start() async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormVideo)
@@ -114,9 +126,17 @@ final class NativePlayerModel: ObservableObject {
             guard !stopped else { return }
             resumeKey = p.resumeKey
             var opts: [String: Any] = [:]
-            if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }
-            let asset = AVURLAsset(url: p.url, options: opts)
-            if await Self.videoUndrawable(asset) { guard !stopped else { return }; stop(); needsFallback = true; return }
+            let asset: AVURLAsset
+            if remux {
+                let (local, rid) = try await RemuxServer.shared.open(url: p.url, headers: p.headers)
+                remuxId = rid
+                guard !stopped else { RemuxServer.shared.close(rid); return }
+                asset = AVURLAsset(url: local)
+            } else {
+                if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }
+                asset = AVURLAsset(url: p.url, options: opts)
+                if await Self.videoUndrawable(asset) { guard !stopped else { return }; stop(); needsFallback = true; return }
+            }
             let item = AVPlayerItem(asset: asset)
             item.textStyleRules = SubtitleStyle.shared.avTextStyleRules
             styleSub = SubtitleStyle.shared.objectWillChange
@@ -142,13 +162,15 @@ final class NativePlayerModel: ObservableObject {
             }
             watchPicture(item, asset)
             var b = await DolbyBadges.inspect(asset)
+            if remux, b.isEmpty, DolbyBadges.nameHintsDV(request.file.name) { b.append("杜比视界") }
             if DolbyBadges.nameHintsAtmos(request.file.name), let i = b.firstIndex(of: "Dolby Digital Plus") { b[i] = "杜比全景声" }
             badges = b
             if let e = item.error { errorText = e.localizedDescription }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             showBadges = false
         } catch {
-            errorText = error.localizedDescription
+            // remux could not open / handle this file: hand it to VLC/MPV instead of showing an error
+            if remux, !stopped { stop(); needsFallback = true } else { errorText = error.localizedDescription }
         }
     }
 
@@ -167,14 +189,15 @@ final class NativePlayerModel: ObservableObject {
     /// Audio running but still no frame size after a few seconds → no picture: fall back.
     private func watchPicture(_ item: AVPlayerItem, _ asset: AVURLAsset) {
         Task { @MainActor [weak self] in
-            for _ in 0..<8 {
+            for _ in 0..<(self?.remux == true ? 15 : 8) {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self, !self.stopped else { return }
+                if item.status == .failed { self.stop(); self.needsFallback = true; return }
                 if item.presentationSize.width > 0 { return }
             }
             guard let self, !self.stopped else { return }
-            let hasVideo = ((try? await asset.loadTracks(withMediaType: .video)) ?? []).isEmpty == false
-            if hasVideo, item.presentationSize.width == 0, self.player.currentTime().seconds > 0.5 {
+            let hasVideo = self.remux || ((try? await asset.loadTracks(withMediaType: .video)) ?? []).isEmpty == false
+            if hasVideo, item.presentationSize.width == 0, self.player.currentTime().seconds > 0.5 || item.status == .failed {
                 self.stop(); self.needsFallback = true
             }
         }
@@ -195,6 +218,7 @@ final class NativePlayerModel: ObservableObject {
         timeObs = nil; endObs = nil
         styleSub = nil
         player.pause()
+        if let remuxId { RemuxServer.shared.close(remuxId); self.remuxId = nil }
         // no replaceCurrentItem(nil) here: during SwiftUI teardown AVPlayer throws from
         // _removeAllLayersAndVideoTargets (闪退). The player and item are released with the model.
     }
@@ -246,8 +270,8 @@ struct NativePlayerView: View {
     @StateObject private var m: NativePlayerModel
     @Environment(\.dismiss) private var dismiss
     var onFallback: () -> Void = {}
-    init(request: PlayRequest, onFallback: @escaping () -> Void = {}) {
-        _m = StateObject(wrappedValue: NativePlayerModel(request)); self.onFallback = onFallback
+    init(request: PlayRequest, remux: Bool = false, onFallback: @escaping () -> Void = {}) {
+        _m = StateObject(wrappedValue: NativePlayerModel(request, remux: remux)); self.onFallback = onFallback
     }
 
     var body: some View {

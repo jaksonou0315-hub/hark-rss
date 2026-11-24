@@ -151,6 +151,9 @@ struct PlaybackSettingsPage: View {
 
             Section {
                 Toggle("MP4/MOV 用苹果原生内核", isOn: $settings.nativeEngine)
+                if settings.nativeEngine {
+                    Toggle(isOn: $settings.nativeRemux) { SettingRowLabel(title: "MKV 重封装给原生内核", detail: "实验：杜比视界 / 全景声走苹果原生，内封字幕暂不显示；失败自动换 VLC/MPV") }
+                }
                 Picker("MKV 等格式播放内核", selection: $settings.mkvEngine) {
                     ForEach(EngineKind.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
