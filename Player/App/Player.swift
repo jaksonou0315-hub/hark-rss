@@ -635,12 +635,13 @@ struct PlayerView: View {
             }
             curFill = fillMode
             landscape = true
-            if !PlayerView.switching { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
+            if !PlayerView.switching { OrientationLock.set(.landscape, force: .landscapeRight) }
             PlayerView.switching = false
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            if landscape { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
-            else { setOrientation(portrait: true) }
+            // 切回 App（控制中心/通知中心/其他 App）后保持原来的方向，并重新铺一次画面
+            setOrientation(portrait: !landscape)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { c.engine.applyFill(curFill, screen: screenSize) }
         }
         .onDisappear { c.stop(); if !PlayerView.switching { OrientationLock.set(.portrait, force: .portrait) } }
         .onChange(of: c.ended) { _, ended in if ended && !PlayerView.switching { close() } }
@@ -995,7 +996,8 @@ struct PlayerView: View {
     private func close() { c.stop(); OrientationLock.leavePlayer { dismiss() } }
 
     private func setOrientation(portrait: Bool) {
-        let allowed: UIInterfaceOrientationMask = followRotation ? .allButUpsideDown : (portrait ? .portrait : .landscape)
+        // 跟随重力只在左右横屏之间切换；竖屏只能用旋转按钮或竖版视频进入，切回 App 时不会被手机方向带成竖屏
+        let allowed: UIInterfaceOrientationMask = portrait ? .portrait : .landscape
         OrientationLock.set(allowed, force: portrait ? .portrait : .landscapeRight)
     }
 }
