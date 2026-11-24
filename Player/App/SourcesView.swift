@@ -383,7 +383,7 @@ struct SourceEditor: View {
                         TextField("地址，如 https://nas.local:5006/dav", text: $source.host).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("用户名", text: $source.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("密码", text: $source.password)
-                    } header: { Text("WebDAV") } footer: { Text("同样适用于 Alist、群晖、坚果云等 WebDAV 服务。") }
+                    } header: { Text(source.extra["cd2"] == "1" ? "CloudDrive2 WebDAV" : "WebDAV") } footer: { Text(source.extra["cd2"] == "1" ? "默认端口 19798，路径 /dav，例如 http://192.168.1.10:19798/dav" : "同样适用于 Alist、群晖、坚果云等 WebDAV 服务。") }
                 case .emby, .jellyfin:
                     Section {
                         TextField("服务器地址，如 http://192.168.1.10:8096", text: $source.host).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

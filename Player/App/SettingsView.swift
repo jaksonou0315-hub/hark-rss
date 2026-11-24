@@ -8,6 +8,8 @@ struct SettingsView: View {
     enum Page: Hashable, Identifiable { case play, av, control, ai; var id: Self { self } }
     @State private var page: Page?
     @AppStorage(MetaSource.key) private var metaSource = "tmdb"
+    @ObservedObject private var sourceStore = SourceStore.shared
+    @State private var cd2Edit: MediaSource?
 
     var body: some View {
         NavigationStack {
@@ -66,6 +68,25 @@ struct SettingsView: View {
                     Text("在 themoviedb.org › 设置 › API 免费申请。Key 只保存在本机钥匙串中。")
                 }
 
+                Section {
+                    ForEach(sourceStore.sources.filter { $0.extra["cd2"] == "1" }) { src in
+                        Button { cd2Edit = src } label: {
+                            HStack {
+                                Image(systemName: "externaldrive.badge.icloud").foregroundStyle(.teal)
+                                VStack(alignment: .leading) {
+                                    Text(src.name).foregroundStyle(.primary)
+                                    Text(src.host).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        cd2Edit = MediaSource(kind: .webdav, name: "CloudDrive2", host: "http://", extra: ["cd2": "1"])
+                    } label: { Label("登录 CloudDrive2", systemImage: "plus.circle") }
+                } header: { Text("CloudDrive2") } footer: {
+                    Text("通过 CD2 的 WebDAV 挂载网盘。地址填 http://CD2所在设备IP:19798/dav，用户名和密码为 CD2 里开启 WebDAV 时设置的账号。添加后会出现在「文件源」里。")
+                }
+
                 Section("媒体库") {
                     LabeledContent("影片数量", value: "\(library.items.count)")
                     LabeledContent("视频文件", value: "\(library.items.reduce(0) { $0 + $1.files.count })")
@@ -86,6 +107,7 @@ struct SettingsView: View {
                 } header: { Text("关于 Hark 影音") }
             }
             .navigationTitle("设置")
+            .sheet(item: $cd2Edit) { src in SourceEditor(source: src).environmentObject(SourceStore.shared) }
             .navigationDestination(item: $page) { p in
                 switch p {
                 case .play: PlaybackSettingsPage().navigationTitle("播放")
