@@ -202,6 +202,35 @@ final class PlayerController: NSObject, ObservableObject {
         return PlayRequest(source: r.source, file: vids[i + 1], siblings: r.siblings)
     }
 
+    struct EpisodeEntry: Identifiable { let id: String; let title: String; let subtitle: String; let still: URL?; let current: Bool; let request: PlayRequest }
+
+    /// Every episode of this show (library) or every video in the folder, for the playlist strip.
+    lazy var episodes: [EpisodeEntry] = {
+        let r = request
+        if let iid = r.itemId, let item = LibraryStore.shared.items.first(where: { $0.id == iid }), item.isTV {
+            let eps = item.files.filter { $0.episode != nil }
+                .sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
+            return eps.compactMap { f in
+                guard let src = SourceStore.shared.source(f.sourceId) else { return nil }
+                let req = PlayRequest(source: src, file: f.file, siblings: [], title: "\(item.title) 第\(f.episode ?? 0)集",
+                                      extraSubtitles: f.subtitles, itemId: iid, fileId: f.id)
+                return EpisodeEntry(id: f.id, title: "第 \(f.episode ?? 0) 集", subtitle: "第\(f.season ?? 1)季,第\(f.episode ?? 0)集",
+                                    still: f.still ?? item.backdrop ?? item.poster, current: f.id == r.fileId, request: req)
+            }
+        }
+        let vids = r.siblings.filter { $0.isVideo }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let list = vids.isEmpty ? [r.file] : vids
+        return list.enumerated().map { i, f in
+            EpisodeEntry(id: f.id, title: "第 \(i + 1) 集", subtitle: f.name, still: nil, current: f.id == r.file.id,
+                         request: PlayRequest(source: r.source, file: f, siblings: r.siblings))
+        }
+    }()
+    var prevRequest: PlayRequest? {
+        guard let i = episodes.firstIndex(where: { $0.current }), i > 0 else { return nil }
+        return episodes[i - 1].request
+    }
+    func playPrev() { if let p = prevRequest, let f = onNext { f(p) } }
+
     func playNext() {
         guard let n = nextRequest, let f = onNext else { toast = "没有下一集了"; return }
         if let k = playable?.resumeKey { Resume.clear(k) }
@@ -432,6 +461,9 @@ struct PlayerView: View {
     @State private var showOnline = false
     @State private var landscape = false
     @State private var trackSheet: TrackSheetKind?
+    @State private var showList = false
+    @State private var swipeY: CGFloat = 0
+    static var slideIn = false
     @AppStorage("ctl.fwd") private var fwdStep = 10
     @AppStorage("ctl.back") private var backStep = 10
     @AppStorage("ctl.hide") private var hideAfter = 4.0
@@ -476,7 +508,15 @@ struct PlayerView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            VideoSurface(view: c.videoView).ignoresSafeArea()
+            VideoSurface(view: c.videoView).ignoresSafeArea().offset(y: swipeY)
+            if swipeY < -20 {
+                VStack { Spacer()
+                    Label(c.nextRequest == nil ? "没有下一集了" : (swipeY < -120 ? "松手播放下一集" : "上滑播放下一集"), systemImage: "chevron.up")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10).glass(in: Capsule())
+                        .padding(.bottom, 40)
+                }.allowsHitTesting(false)
+            }
             GeometryReader { g in
                 gestures.onAppear { screenSize = g.size }.onChange(of: g.size) { _, v in screenSize = v; c.engine.applyFill(curFill, screen: v) }
             }
@@ -528,14 +568,15 @@ struct PlayerView: View {
             if locked {
                 if showControls {
                     HStack {
-                        Button { locked = false; scheduleHide() } label: { Image(systemName: "lock.fill").font(.title3).frame(width: 48, height: 48) }
+                        Button { locked = false; scheduleHide() } label: { Image(systemName: "lock.fill").font(.title3).frame(width: 52, height: 52) }
                             .glass(in: Circle(), interactive: true).foregroundStyle(.white)
-                            .padding(.leading, 24)
+                            .padding(.leading, 20)
                         Spacer()
                     }
                     .transition(.opacity)
                 }
-            } else if showControls && trackSheet == nil { controls.transition(.opacity) }
+            } else if showControls && trackSheet == nil && !showList { controls.transition(.opacity) }
+            if showList { playlistOverlay }
             if let sk = c.activeSkip, !locked, trackSheet == nil {
                 VStack {
                     Spacer()
@@ -570,6 +611,11 @@ struct PlayerView: View {
         .persistentSystemOverlays(.hidden)
         .task { c.onNext = { r in PlayerView.switching = true; onNext(r) }; await c.start(); scheduleHide() }
         .onAppear {
+            if PlayerView.slideIn {
+                PlayerView.slideIn = false
+                swipeY = max(UIScreen.main.bounds.height, 400)
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { swipeY = 0 }
+            }
             curFill = fillMode
             landscape = true
             if !PlayerView.switching { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
@@ -587,6 +633,7 @@ struct PlayerView: View {
         .sheet(isPresented: $showOnline) { OnlineSubtitleSheet(controller: c) }
         .animation(.easeInOut(duration: 0.2), value: showControls)
         .animation(.spring(response: 0.35, dampingFraction: 0.9), value: trackSheet)
+        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: showList)
         .animation(.spring, value: c.toast)
     }
 
@@ -594,13 +641,19 @@ struct PlayerView: View {
     private func trackPanel(_ k: TrackSheetKind) -> some View {
         GeometryReader { g in
             let land = g.size.width > g.size.height
-            ZStack(alignment: land ? .trailing : .bottom) {
+            ZStack(alignment: land ? .bottomTrailing : .bottom) {
                 Color.black.opacity(0.001).contentShape(Rectangle())
                     .onTapGesture { closePanel() }
-                TrackSheet(c: c, kind: k, close: { closePanel() },
-                           openOnline: { closePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showOnline = true } })
-                    .frame(width: land ? min(max(g.size.width * 0.27, 300), 380) : g.size.width - 16,
-                           height: land ? g.size.height - 16 : max(g.size.height * 0.38, 300))
+                Group {
+                    if k == .more { morePanel }
+                    else {
+                        TrackSheet(c: c, kind: k, close: { closePanel() },
+                                   openOnline: { closePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showOnline = true } })
+                    }
+                }
+                    .frame(width: land ? min(max(g.size.width * 0.3, 320), 400) : g.size.width - 16,
+                           height: land ? min(g.size.height * 0.68, k == .more ? 330 : 420) : max(g.size.height * 0.38, 300))
+                    .padding(.bottom, land ? 70 : 0).padding(.trailing, land ? 12 : 0)
                     .background(.ultraThinMaterial.opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -617,80 +670,157 @@ struct PlayerView: View {
     }
 
     private var controls: some View {
-        VStack {
-            GlassGroup(spacing: 10) {
-                HStack(spacing: 10) {
-                    Button { close() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
-                        .glass(in: Circle(), interactive: true)
-                    Button { locked = true; showControls = true; scheduleHide() } label: { Image(systemName: "lock.open").frame(width: 40, height: 40) }
-                        .glass(in: Circle(), interactive: true)
-                    Text(c.title).font(.headline).lineLimit(1).foregroundStyle(.white)
-                        .padding(.horizontal, 14).frame(height: 40)
-                        .glass(in: Capsule())
+        ZStack {
+            LinearGradient(colors: [.black.opacity(0.35), .clear, .clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea().allowsHitTesting(false)
+            VStack(spacing: 0) {
+                // top: close | fill mode, shrink (picture in picture)
+                HStack(spacing: 14) {
+                    roundButton("xmark") { close() }
                     Spacer()
-                    if btnMarks { marksMenu }
-                    if btnSub { subtitleMenu }
-                    if btnAudio { audioMenu }
-                    if btnSpeed { speedMenu }
-                    if shotButton {
-                        Button { snapshot() } label: { Image(systemName: "camera").frame(width: 40, height: 40) }
-                            .glass(in: Circle(), interactive: true)
+                    roundButton(curFill == 0 ? "arrow.up.left.and.arrow.down.right.rectangle" : curFill == 1 ? "rectangle.arrowtriangle.2.inward" : "arrow.left.and.right.square") {
+                        curFill = (curFill + 1) % 3
+                        c.engine.applyFill(curFill, screen: screenSize)
+                        flash(["适应屏幕", "填充屏幕", "拉伸铺满"][curFill]); scheduleHide()
                     }
-                    if rotateButton {
-                        Button { landscape.toggle(); setOrientation(portrait: !landscape) } label: {
-                            Image(systemName: "rotate.right").frame(width: 40, height: 40)
-                        }.glass(in: Circle(), interactive: true)
-                    }
+                    roundButton("pip.enter") { flash("画中画需要苹果原生内核，VLC/MPV 暂不支持") }
                 }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16).padding(.top, 8)
-
-            Spacer()
-
-            GlassGroup(spacing: 24) {
-                HStack(spacing: 28) {
-                    if seekButtons {
-                        Button { c.skip(Int32(-backStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("gobackward", backStep)).font(.title2).frame(width: 60, height: 60) }
-                            .glass(in: Circle(), interactive: true)
-                    }
-                    Button { c.toggle(); scheduleHide() } label: {
-                        Group {
-                            if c.buffering && c.errorText == nil { ProgressView().controlSize(.large).tint(.white) }
-                            else { Image(systemName: c.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 34)) }
-                        }
-                        .frame(width: 84, height: 84)
-                    }
-                    .glass(in: Circle(), interactive: true)
-                    if seekButtons {
-                        Button { c.skip(Int32(fwdStep)); scheduleHide() } label: { Image(systemName: Self.seekIcon("goforward", fwdStep)).font(.title2).frame(width: 60, height: 60) }
-                            .glass(in: Circle(), interactive: true)
-                    }
-                    if nextButton, c.nextRequest != nil {
-                        Button { c.playNext() } label: { Image(systemName: "forward.end.fill").font(.title3).frame(width: 52, height: 52) }
-                            .glass(in: Circle(), interactive: true)
-                    }
-                }
-            }
-            .foregroundStyle(.white)
-
-            Spacer()
-
-            VStack(spacing: 2) {
-                ThinScrubber(value: scrubbing ? scrubValue : c.position,
-                             onChanged: { v in scrubbing = true; scrubValue = v; hideTask?.cancel() },
-                             onEnded: { v in scrubValue = v; c.seek(v); scrubbing = false; scheduleHide() })
+                Spacer()
+                // middle: lock | rotate
                 HStack {
-                    Text(PlayerController.fmt(scrubbing ? Int32(Float(c.lengthMs) * scrubValue) : c.timeMs))
+                    roundButton("lock.circle.dotted", size: 52) { locked = true; showControls = true; scheduleHide() }
                     Spacer()
-                    Text("-" + PlayerController.fmt(max(0, c.lengthMs - (scrubbing ? Int32(Float(c.lengthMs) * scrubValue) : c.timeMs))))
+                    if rotateButton {
+                        roundButton("rectangle.portrait.rotate", size: 52) { landscape.toggle(); setOrientation(portrait: !landscape); scheduleHide() }
+                    }
                 }
-                .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                // progress
+                HStack(spacing: 12) {
+                    Text(PlayerController.fmt(scrubbing ? Int32(Float(c.lengthMs) * scrubValue) : c.timeMs))
+                    ThinScrubber(value: scrubbing ? scrubValue : c.position,
+                                 onChanged: { v in scrubbing = true; scrubValue = v; hideTask?.cancel() },
+                                 onEnded: { v in scrubValue = v; c.seek(v); scrubbing = false; scheduleHide() })
+                    Text(PlayerController.fmt(c.lengthMs))
+                }
+                .font(.subheadline.monospacedDigit()).foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.6), radius: 2)
+                // bottom row
+                ZStack {
+                    HStack(spacing: 22) {
+                        Button { showList = true; hideTask?.cancel() } label: { Image(systemName: "list.bullet").font(.title2).frame(width: 44, height: 44) }
+                        speedMenu
+                        Spacer()
+                        Button { trackSheet = .subtitle; hideTask?.cancel() } label: { Image(systemName: "text.bubble").font(.title2).frame(width: 44, height: 44) }
+                        Button { trackSheet = .audio; hideTask?.cancel() } label: { Image(systemName: "waveform.circle").font(.title2).frame(width: 44, height: 44) }
+                        Button { trackSheet = .more; hideTask?.cancel() } label: { Image(systemName: "gearshape").font(.title2).frame(width: 44, height: 44) }
+                    }
+                    HStack(spacing: 26) {
+                        if nextButton, c.prevRequest != nil {
+                            roundButton("backward.end.fill", size: 48) { c.playPrev() }
+                        }
+                        if seekButtons {
+                            roundButton(Self.seekIcon("gobackward", backStep), size: 56, font: .title2) { c.skip(Int32(-backStep)); scheduleHide() }
+                        }
+                        Button { c.toggle(); scheduleHide() } label: {
+                            Group {
+                                if c.buffering && c.errorText == nil { ProgressView().controlSize(.large).tint(.white) }
+                                else { Image(systemName: c.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 32)) }
+                            }
+                            .frame(width: 96, height: 66)
+                        }
+                        .glass(in: Capsule(), interactive: true)
+                        if seekButtons {
+                            roundButton(Self.seekIcon("goforward", fwdStep), size: 56, font: .title2) { c.skip(Int32(fwdStep)); scheduleHide() }
+                        }
+                        if nextButton, c.nextRequest != nil {
+                            roundButton("forward.end.fill", size: 48) { c.playNext() }
+                        }
+                    }
+                }
+                .padding(.top, 6)
             }
-            .padding(.horizontal, 24).padding(.top, 30).padding(.bottom, 14)
-            .background(LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
         }
+    }
+
+    private func roundButton(_ icon: String, size: CGFloat = 52, font: Font = .title3, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: icon).font(font).frame(width: size, height: size) }
+            .glass(in: Circle(), interactive: true)
+    }
+
+    /// Episode strip (bottom-left list button): thumbnails with 第 N 集 / 第 S 季, 第 N 集.
+    private var playlistOverlay: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.25).ignoresSafeArea().onTapGesture { showList = false; scheduleHide() }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 20) {
+                        ForEach(c.episodes) { e in
+                            Button {
+                                showList = false
+                                if !e.current { PlayerView.switching = true; onNext(e.request) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ZStack(alignment: .bottomLeading) {
+                                        PosterImage(url: e.still, title: e.title)
+                                            .frame(width: 200, height: 112)
+                                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        if e.current {
+                                            Image(systemName: "waveform").font(.caption.weight(.bold)).padding(6)
+                                                .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 8)).padding(8)
+                                        }
+                                    }
+                                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(e.current ? Color.green : .clear, lineWidth: 2.5))
+                                    Text(e.title).font(.headline).lineLimit(1)
+                                    Text(e.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                                }
+                                .frame(width: 200, alignment: .leading)
+                                .foregroundStyle(.white)
+                            }
+                            .buttonStyle(.plain).id(e.id)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .frame(height: 190)
+                .onAppear { if let cur = c.episodes.first(where: { $0.current }) { proxy.scrollTo(cur.id, anchor: .center) } }
+            }
+            .padding(.bottom, 20)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    /// 更多设置 panel (gear button).
+    private var morePanel: some View {
+        VStack(spacing: 0) {
+            Text("更多设置").font(.headline).padding(.vertical, 14)
+            Divider().overlay(.white.opacity(0.15))
+            ScrollView {
+                VStack(spacing: 0) {
+                    Menu {
+                        Button { ManualSegments.setIntroEnd(c.segKey, c.timeMs); c.reloadSegments(); flash("已把当前位置设为片头结束") } label: { Label("当前位置设为片头结束", systemImage: "forward.frame") }
+                        Button { ManualSegments.setCreditsFromEnd(c.segKey, max(0, c.lengthMs - c.timeMs)); c.reloadSegments(); flash("已把当前位置设为片尾开始") } label: { Label("当前位置设为片尾开始", systemImage: "backward.frame") }
+                        Button(role: .destructive) { ManualSegments.clear(c.segKey); c.reloadSegments(); flash("已清除手动片头片尾") } label: { Label("清除手动片头片尾", systemImage: "xmark.circle") }
+                    } label: { moreRow("forward.end", "跳过片头片尾") { Image(systemName: "chevron.down").foregroundStyle(.white.opacity(0.7)) } }
+                    moreRow("backward.end", "上一集 / 下一集按钮") { Toggle("", isOn: $nextButton).labelsHidden() }
+                    moreRow("arrow.clockwise", "快退 / 快进按钮") { Toggle("", isOn: $seekButtons).labelsHidden() }
+                    Button { closePanel(); snapshot() } label: { moreRow("camera", "截图") { EmptyView() } }
+                    Button { closePanel(); showOnline = true } label: { moreRow("magnifyingglass", "搜索字幕") { EmptyView() } }
+                }
+            }
+        }
+        .foregroundStyle(.white).tint(.green)
+    }
+    private func moreRow<T: View>(_ icon: String, _ title: String, @ViewBuilder trailing: () -> T) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).frame(width: 24)
+            Text(title).multilineTextAlignment(.leading)
+            Spacer()
+            trailing()
+        }
+        .font(.body).padding(.horizontal, 18).frame(minHeight: 54).contentShape(Rectangle())
     }
 
     private var subtitleMenu: some View {
@@ -715,9 +845,8 @@ struct PlayerView: View {
                 }
             }
         } label: {
-            Image(systemName: "gauge.with.dots.needle.67percent").frame(width: 40, height: 40)
+            Text("\(Double(c.rate), specifier: "%g")x").font(.title3.weight(.medium)).frame(minWidth: 44, minHeight: 44)
         }
-        .glass(in: Circle(), interactive: true)
     }
 
     private func toggleControls() { showControls.toggle(); if showControls { scheduleHide() } }
@@ -773,6 +902,14 @@ struct PlayerView: View {
                     levelHUD = "音量 \(Int(SystemLevels.volume * 100))%"
                 }
             },
+            onSwipe: { dy, ended in
+                guard !locked else { return }
+                if !ended { swipeY = min(0, dy); return }
+                if dy < -120, c.nextRequest != nil {
+                    withAnimation(.easeIn(duration: 0.25)) { swipeY = -max(screenSize.height, 400) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { PlayerView.slideIn = true; c.playNext() }
+                } else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipeY = 0 } }
+            },
             onPinch: { scale, ended in
                 guard pinchZoom, !locked, ended else { return }
                 if scale > 1.12 { curFill = 1; flash("填充屏幕") }
@@ -816,7 +953,7 @@ struct PlayerView: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(max(1, hideAfter) * 1_000_000_000))
-            if !Task.isCancelled, c.isPlaying || locked, !scrubbing, trackSheet == nil, !showOnline { showControls = false }
+            if !Task.isCancelled, c.isPlaying || locked, !scrubbing, trackSheet == nil, !showOnline, !showList { showControls = false }
         }
     }
     private func flash(_ s: String) { c.toast = s }
@@ -869,7 +1006,7 @@ struct OnlineSubtitleSheet: View {
 }
 
 
-enum TrackSheetKind: String, Identifiable { case subtitle, audio; var id: String { rawValue } }
+enum TrackSheetKind: String, Identifiable { case subtitle, audio, more; var id: String { rawValue } }
 
 struct TrackSheet: View {
     @ObservedObject var c: PlayerController

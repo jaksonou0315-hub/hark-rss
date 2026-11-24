@@ -103,6 +103,8 @@ struct GestureLayer: UIViewRepresentable {
     var onLongMoved: (CGSize) -> Void
     var onLongEnded: () -> Void
     var onPan: (_ began: Bool, _ leftSide: Bool, _ dy: CGFloat, _ ended: Bool) -> Void
+    /// Vertical drag that starts in the middle third: total dy (up is negative), ended.
+    var onSwipe: (_ dy: CGFloat, _ ended: Bool) -> Void = { _, _ in }
     var onPinch: (_ scale: CGFloat, _ ended: Bool) -> Void
 
     func makeCoordinator() -> Coord { Coord(self) }
@@ -125,6 +127,7 @@ struct GestureLayer: UIViewRepresentable {
         var p: GestureLayer
         private var longStart: CGPoint = .zero
         private var panLeft = false
+        private var panMiddle = false
         init(_ p: GestureLayer) { self.p = p }
         @objc func tap(_ g: UITapGestureRecognizer) { p.onTap() }
         @objc func double(_ g: UITapGestureRecognizer) {
@@ -150,13 +153,17 @@ struct GestureLayer: UIViewRepresentable {
             guard let v = g.view else { return }
             switch g.state {
             case .began:
-                panLeft = g.location(in: v).x < v.bounds.width / 2
-                p.onPan(true, panLeft, 0, false)
+                let x = g.location(in: v).x / max(1, v.bounds.width)
+                panMiddle = x > 0.33 && x < 0.67
+                panLeft = x < 0.5
+                if panMiddle { p.onSwipe(0, false) } else { p.onPan(true, panLeft, 0, false) }
             case .changed:
+                if panMiddle { p.onSwipe(g.translation(in: v).y, false); return }
                 let dy = g.translation(in: v).y
                 g.setTranslation(.zero, in: v)
                 p.onPan(false, panLeft, -dy / max(200, v.bounds.height * 0.8), false)
-            default: p.onPan(false, panLeft, 0, true)
+            default:
+                if panMiddle { p.onSwipe(g.translation(in: v).y, true) } else { p.onPan(false, panLeft, 0, true) }
             }
         }
         @objc func pinch(_ g: UIPinchGestureRecognizer) {
