@@ -99,6 +99,12 @@ final class LibraryStore: ObservableObject {
     private init() {
         if let d = try? Data(contentsOf: fileURL), let s = try? JSONDecoder().decode(Snapshot.self, from: d) {
             folders = s.folders; items = s.items
+            // titles saved before 1.22.17 could end in a dangling "(" ("航海王 (") and never matched TMDB
+            for i in items.indices where items[i].tmdbId == nil {
+                var c = items[i].title
+                while let l = c.last, "([（【{〔「 ".contains(l) { c.removeLast() }
+                if c != items[i].title, !c.isEmpty { items[i].title = c }
+            }
         }
         // a coalesced save still waiting must hit disk before iOS suspends us
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in

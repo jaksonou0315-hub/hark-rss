@@ -47,6 +47,9 @@ enum NameParser {
         s = s.replacingOccurrences(of: ".", with: " ").replacingOccurrences(of: "_", with: " ")
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: " -–·:：,，&+").union(.whitespaces))
         while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        // "航海王 (1999)" cut at the year leaves a dangling "航海王 (": drop unclosed brackets at the end.
+        let trim = CharacterSet(charactersIn: " -–·:：,，&+").union(.whitespaces)
+        while let c = s.last, "([（【{〔「".contains(c) { s.removeLast(); s = s.trimmingCharacters(in: trim) }
         return s
     }
 
