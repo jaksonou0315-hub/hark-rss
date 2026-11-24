@@ -805,10 +805,17 @@ struct BLSubMenuItems: View {
 
 extension View {
     func categoryMenu(_ item: LibraryItem) -> some View {
-        contextMenu {
-            if Groupings.isBL(item) { BLSubMenuItems(item: item) }
-            CategoryMenuItems(item: item, flat: true)
-        }
+        // Own preview + preview shape: the default snapshot of the whole tile (inside a lazy horizontal
+        // row that re-lays out during 数据同步) floated off to odd places and flew back from elsewhere.
+        self.contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contextMenu {
+                if Groupings.isBL(item) { BLSubMenuItems(item: item) }
+                CategoryMenuItems(item: item, flat: true)
+            } preview: {
+                PosterImage(url: item.poster, title: item.title)
+                    .frame(width: 200, height: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
     }
 }
 
