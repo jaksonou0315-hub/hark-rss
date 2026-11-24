@@ -94,7 +94,11 @@ enum NameParser {
         var title = cleanTitle(head)
         // Chinese + English names ("流浪地球 The Wandering Earth") – keep the CJK part for TMDB zh search
         if let cjkEnd = title.firstIndex(where: { $0.isASCII && $0.isLetter }),
-           title[..<cjkEnd].contains(where: { !$0.isASCII }) {
+           title[..<cjkEnd].contains(where: { !$0.isASCII }),
+           // only a real 原名 tail ("流浪地球 The Wandering Earth"): the rest must be all Latin.
+           // "哆啦A梦" / "X战警：天启" keep their letters.
+           !title[cjkEnd...].contains(where: { !$0.isASCII && $0.isLetter }),
+           title[cjkEnd...].filter(\.isLetter).count >= 3 {
             let cjk = cleanTitle(String(title[..<cjkEnd]))
             if !cjk.isEmpty { title = cjk }
         }
