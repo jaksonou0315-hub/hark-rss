@@ -6,7 +6,7 @@ import Network
 /// local HTTP proxy, so VLC/MPV play it like a plain .m2ts.
 enum IsoError: Error { case bad(String) }
 
-private struct Ext { var off: Int64; var len: Int64 }   // byte range inside the ISO
+struct IsoExt { var off: Int64; var len: Int64 }   // byte range inside the ISO
 
 final class IsoReader {
     let url: URL; let headers: [String: String]
@@ -42,7 +42,7 @@ final class UDF {
     static let S = 2048
     private var physStart: Int64 = 0                 // physical partition start sector
     private var maps: [(meta: Bool, metaFile: Int64)] = []
-    private var metaExts: [Ext] = []                 // metadata partition → ISO bytes
+    private var metaExts: [IsoExt] = []                 // metadata partition → ISO bytes
     init(_ r: IsoReader) { self.r = r }
 
     private func sector(_ n: Int64, count: Int = 1) async throws -> Data { try await r.read(n * Int64(Self.S), count * Self.S) }
@@ -57,7 +57,7 @@ final class UDF {
         return (physStart + lbn) * Int64(Self.S)
     }
 
-    struct Entry { var exts: [Ext]; var size: Int64; var data: Data? }
+    struct Entry { var exts: [IsoExt]; var size: Int64; var data: Data? }
 
     private func entry(at off: Int64, part: Int) async throws -> Entry {
         let d = try await r.read(off, Self.S)
@@ -70,7 +70,7 @@ final class UDF {
         let kind = d.u16(34) & 7
         let start = base + lea
         if kind == 3 { return Entry(exts: [], size: size, data: d.subdata(in: d.startIndex + start ..< d.startIndex + min(d.count, start + lad))) }
-        var exts: [Ext] = []
+        var exts: [IsoExt] = []
         var o = start
         let step = kind == 0 ? 8 : 16
         // Like libudfread: directories stay in their (metadata) partition, file data is in the physical one.
@@ -83,7 +83,7 @@ final class UDF {
             if typ == 3 { break }       // continuation – not needed for the files we read
             let lbn = d.u32(o + 4)
             let p = kind == 0 ? shortPart : (isDir ? d.u16(o + 8) : phys)
-            if typ == 0 { exts.append(Ext(off: try addr(p, lbn), len: len)) }
+            if typ == 0 { exts.append(IsoExt(off: try addr(p, lbn), len: len)) }
             o += step
         }
         return Entry(exts: exts, size: size, data: nil)
@@ -118,7 +118,7 @@ final class UDF {
     }
 
     /// The main title's byte ranges inside the ISO.
-    func mainTitle() async throws -> (name: String, exts: [Ext], size: Int64) {
+    func mainTitle() async throws -> (name: String, exts: [IsoExt], size: Int64) {
         let avdp = try await sector(256)
         guard avdp.u16(0) == 2 else { throw IsoError.bad("不是 UDF 镜像（可能是旧式 ISO9660）") }
         let vdsLen = Int(avdp.u32(16)), vdsLoc = avdp.u32(20)
@@ -177,7 +177,7 @@ final class UDF {
 /// Serves the main title of an ISO as http://127.0.0.1:port/iso/<id>.m2ts with byte ranges.
 final class IsoServer {
     static let shared = IsoServer()
-    private struct Src { let reader: IsoReader; let exts: [Ext]; let size: Int64 }
+    private struct Src { let reader: IsoReader; let exts: [IsoExt]; let size: Int64 }
     private var srcs: [String: Src] = [:]
     private var listener: NWListener?
     private var port: UInt16 = 0
