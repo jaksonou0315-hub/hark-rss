@@ -358,6 +358,9 @@ final class ScanCenter: ObservableObject {
         default: ms = 300        // cloud drives: be gentle by default
         }
         }
+        // Per-source QPS limit (编辑文件源 › 高级 › QPS 限制) overrides the defaults.
+        var ms = ms
+        if let q = Double(s.extra["qps"] ?? ""), q > 0 { ms = max(ms == 0 ? 0 : 0, Int(1000 / q)) }
         if let g = gates[s.id], gateMs[s.id] == ms { return g }
         let g = SourceGate(minDelayMs: ms)
         gates[s.id] = g

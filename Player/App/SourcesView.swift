@@ -506,10 +506,14 @@ struct SourceEditor: View {
                             Toggle("预获取文件详情", isOn: flag("prefetch", true))
                             Toggle("预缓存海报", isOn: flag("posterCache", true))
                             Toggle("智能文件夹", isOn: flag("smartFolders", false))
+                            LabeledContent("QPS 限制") {
+                                TextField(source.kind == .pan115 ? "0.8" : "不限", text: binding("qps"))
+                                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            }
                         }
                     } footer: {
                         if showAdvanced {
-                            Text("自动扫描：保存后把整个网盘加入媒体库并扫描。预获取文件详情：扫描时就下载类型、分级、国家等资料。预缓存海报：扫描后提前下载海报，浏览更快。智能文件夹：浏览时用海报和片名显示影片文件夹，只有一个视频的文件夹点一下直接播放。")
+                            Text("自动扫描：保存后把整个网盘加入媒体库并扫描。预获取文件详情：扫描时就下载类型、分级、国家等资料。预缓存海报：扫描后提前下载海报，浏览更快。QPS 限制：每秒最多请求几次，如 0.8 即约 1.25 秒一次，可降低网盘风控。智能文件夹：浏览时用海报和片名显示影片文件夹，只有一个视频的文件夹点一下直接播放。")
                         }
                     }
                 }
