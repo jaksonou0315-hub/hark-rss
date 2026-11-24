@@ -713,7 +713,7 @@ struct PlayerView: View {
                     }
                 }
                     .frame(width: land ? 290 : min(g.size.width - 32, 340),
-                           height: land ? min(g.size.height * 0.62, k == .more ? 250 : (k == .audio ? 200 : 330)) : min(g.size.height * 0.45, 380))
+                           height: land ? min(g.size.height * 0.62, k == .more ? 250 : (k == .audio ? 250 : 330)) : min(g.size.height * 0.45, 380))
                     .background(.ultraThinMaterial.opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -1095,22 +1095,27 @@ struct TrackSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    if kind == .subtitle { subtitleRoot } else { audioRoot }
+            VStack(spacing: 0) {
+                // Same header as 更多设置 (system nav bar was oversized and covered the 主/副 switch).
+                Text(kind == .subtitle ? "字幕" : "音频").font(.headline).padding(.vertical, 10)
+                Divider().overlay(.white.opacity(0.15))
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if kind == .subtitle { subtitleRoot } else { audioRoot }
+                    }
+                    .padding(.bottom, 8)
                 }
-                .padding(.horizontal, 10).padding(.bottom, 10)
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
+            .foregroundStyle(.white)
+            .toolbar(.hidden, for: .navigationBar)
             .containerBackground(.clear, for: .navigation)
-            .navigationTitle(kind == .subtitle ? "字幕" : "音频")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $showSettings) { settingsList }
+            .navigationDestination(isPresented: $showSettings) { settingsList.toolbar(.visible, for: .navigationBar) }
             .navigationDestination(isPresented: $showAISettings) {
                 Form { AITranslateSettings() }
                     .scrollContentBackground(.hidden)
                     .containerBackground(.clear, for: .navigation)
-                    .navigationTitle("AI 翻译").navigationBarTitleDisplayMode(.inline)
+                    .navigationTitle("AI 翻译").navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar)
             }
         }
         .preferredColorScheme(.dark)
@@ -1128,7 +1133,7 @@ struct TrackSheet: View {
             seg("副", secondary) { secondary = true }
         }
         .padding(3).background(.white.opacity(0.1), in: Capsule())
-        .padding(.top, 4).padding(.bottom, secondary ? 4 : 8)
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, secondary ? 4 : 6)
         if secondary {
             Text("顶部显示 · 仅文本字幕").font(.caption2).foregroundStyle(.white.opacity(0.5)).padding(.bottom, 6)
             line("关闭", selected: c.secondaryKey == "off") { c.setSecondary("off") }
@@ -1152,7 +1157,7 @@ struct TrackSheet: View {
                 }
             }
         }
-        Divider().overlay(.white.opacity(0.12)).padding(.vertical, 4)
+        Divider().overlay(.white.opacity(0.12)).padding(.horizontal, 16).padding(.vertical, 2)
         action("magnifyingglass", "搜索字幕") { openOnline() }
         action("doc.badge.plus", "加载本地字幕") { importing = true }
         if !secondary { action("slider.horizontal.3", "字幕设置", chevron: true) { showSettings = true } }
@@ -1162,8 +1167,8 @@ struct TrackSheet: View {
     @ViewBuilder private var audioRoot: some View {
         ForEach(c.audioTracks, id: \.id) { t in
             Button { c.selectAudio(t.id) } label: {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).opacity(t.id == c.currentAudio ? 1 : 0).frame(width: 16)
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).opacity(t.id == c.currentAudio ? 1 : 0).frame(width: 24)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(t.name).font(.subheadline).multilineTextAlignment(.leading)
                         if let tag = Self.channelTag(t.name) {
@@ -1173,7 +1178,7 @@ struct TrackSheet: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 8).padding(.vertical, 9).contentShape(Rectangle())
+                .padding(.horizontal, 16).padding(.vertical, 10).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
@@ -1192,43 +1197,43 @@ struct TrackSheet: View {
     // MARK: rows
     private func seg(_ t: String, _ on: Bool, _ a: @escaping () -> Void) -> some View {
         Button(action: a) {
-            Text(t).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 30)
+            Text(t).font(.footnote.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 26)
                 .background(on ? Color.white.opacity(0.28) : .clear, in: Capsule())
         }.buttonStyle(.plain)
     }
     private func line(_ name: String, selected: Bool, indent: Bool = false, _ a: @escaping () -> Void) -> some View {
         Button(action: a) {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(selected ? 1 : 0).frame(width: 16)
+            HStack(spacing: 14) {
+                Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).opacity(selected ? 1 : 0).frame(width: 24)
                 Text(name).font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, indent ? 14 : 8).padding(.trailing, 8).frame(minHeight: 38).contentShape(Rectangle())
+            .padding(.leading, indent ? 24 : 16).padding(.trailing, 16).frame(minHeight: 42).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
     private func group<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
         VStack(spacing: 0) {
             Button { withAnimation(.easeInOut(duration: 0.2)) { embeddedOpen.toggle() } } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "rectangle.stack").font(.footnote)
-                    Text(title).font(.footnote)
+                HStack(spacing: 14) {
+                    Image(systemName: "rectangle.stack").font(.subheadline).frame(width: 24)
+                    Text(title).font(.subheadline)
                     Spacer()
                     Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).rotationEffect(.degrees(embeddedOpen ? 0 : -90))
                 }
-                .foregroundStyle(.white.opacity(0.7)).padding(.horizontal, 8).frame(height: 34).contentShape(Rectangle())
+                .foregroundStyle(.white.opacity(0.75)).padding(.horizontal, 16).frame(height: 42).contentShape(Rectangle())
             }.buttonStyle(.plain)
             if embeddedOpen { content() }
         }
     }
     private func action(_ icon: String, _ title: String, chevron: Bool = false, _ a: @escaping () -> Void) -> some View {
         Button(action: a) {
-            HStack(spacing: 10) {
-                Image(systemName: icon).font(.subheadline).frame(width: 18)
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.subheadline).frame(width: 24)
                 Text(title).font(.subheadline)
                 Spacer()
                 if chevron { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.5)) }
             }
-            .padding(.horizontal, 8).frame(height: 40).contentShape(Rectangle())
+            .padding(.horizontal, 16).frame(height: 42).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 
