@@ -48,7 +48,10 @@ final class DownloadStore: ObservableObject {
     /// Used by both players: a downloaded file plays from disk, keeping the same resume key.
     func playable(_ provider: SourceProvider, _ file: RemoteFile) async throws -> PlayableMedia {
         let key = provider.resumeKey(file)
-        if let u = localURL(key) { return PlayableMedia(url: u, title: file.name, resumeKey: key) }
+        if let u = localURL(key) {
+            let p = PlayableMedia(url: u, title: file.name, resumeKey: key)
+            return file.ext == "iso" ? try await IsoServer.shared.open(p) : p
+        }
         if file.ext == "strm" {
             // .strm (OpenList Strm driver etc.): a tiny text file holding the real stream URL.
             // The drive is only asked for the link at play time, so scans never hit its API.
@@ -62,7 +65,12 @@ final class DownloadStore: ObservableObject {
             p.headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)"
             return p
         }
-        return try await provider.playable(file)
+        let p = try await provider.playable(file)
+        if file.ext == "iso" {
+            do { return try await IsoServer.shared.open(p) }
+            catch IsoError.bad(let m) { throw AppError.message("ISO：\(m)") }
+        }
+        return p
     }
 
     func enqueue(_ files: [LibraryFile], title: String) {

@@ -403,7 +403,7 @@ struct HomeView: View {
     /// While 数据同步中 the items change every few seconds; rebuilding every shelf that often recreated the
     /// tiles under the finger and cancelled taps (nothing opened). During a scan rebuild at most every 15 s.
     private func rebuild(force: Bool = false) {
-        if !force, library.scanning, Date().timeIntervalSince(lastBuild) < 15 { return }
+        if !force, library.scanning || library.dirScan != nil || library.enrichLeft > 0, Date().timeIntervalSince(lastBuild) < 15 { return }
         lastBuild = Date()
         shelves = HomeShelves.build(library.items, marks: marks)
     }
@@ -471,6 +471,7 @@ struct HomeView: View {
             .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
             .onAppear { rebuild(force: true) }
             .onChange(of: library.scanning) { _, v in if !v { rebuild(force: true) } }
+            .onChange(of: library.enrichLeft == 0) { _, v in if v { rebuild(force: true) } }
             .task { await library.enrich() }
         }
     }
@@ -525,10 +526,14 @@ struct HomeView: View {
         HStack {
             Text(title).font(.title3.bold())
             Spacer()
-            NavigationLink(value: route) {
+            // Button + path.append: a NavigationLink whose value (thousands of ids) changes on every
+            // rebuild during sync/enrich lost the tap.
+            Button { path.append(route) } label: {
                 HStack(spacing: 3) { Text("全部 · \(count)"); Image(systemName: "chevron.right") }
                     .font(.subheadline).foregroundStyle(.white.opacity(0.75))
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
     }
