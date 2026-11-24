@@ -57,16 +57,48 @@ struct AuroraBackground: View {
     }
 }
 
+/// Poster loader: memory cache + shared in-flight loads (re-renders never cancel a download) + URLCache on disk, retries twice.
+@MainActor
+final class PosterCache {
+    static let shared = PosterCache()
+    private let mem: NSCache<NSURL, UIImage> = { let c = NSCache<NSURL, UIImage>(); c.totalCostLimit = 120 << 20; return c }()
+    private var inflight: [URL: Task<UIImage?, Never>] = [:]
+    func cached(_ u: URL) -> UIImage? { mem.object(forKey: u as NSURL) }
+    func load(_ u: URL) async -> UIImage? {
+        if let i = cached(u) { return i }
+        if let t = inflight[u] { return await t.value }
+        let t = Task.detached(priority: .userInitiated) { () -> UIImage? in
+            for attempt in 0..<3 {
+                var r = URLRequest(url: u, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
+                r.setValue("image/*", forHTTPHeaderField: "Accept")
+                if let (d, resp) = try? await URLSession.shared.data(for: r),
+                   (resp as? HTTPURLResponse).map({ $0.statusCode < 400 }) ?? true,
+                   let img = UIImage(data: d) {
+                    return img.preparingForDisplay() ?? img
+                }
+                try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 800_000_000)
+            }
+            return nil
+        }
+        inflight[u] = t
+        let img = await t.value
+        inflight[u] = nil
+        if let img { mem.setObject(img, forKey: u as NSURL, cost: Int(img.size.width * img.size.height * img.scale * img.scale * 4)) }
+        return img
+    }
+}
+
 struct PosterImage: View {
     var url: URL?
     var title: String
+    @State private var image: UIImage?
     var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .easeOut)) { phase in
-            switch phase {
-            case .success(let img):
+        let img = image ?? url.flatMap { PosterCache.shared.cached($0) }
+        Group {
+            if let img {
                 // fill the frame but never spill past it: Color sizes to the proposed frame, the image is an overlay
-                Color.clear.overlay { img.resizable().scaledToFill().allowsHitTesting(false) }.clipped()
-            default:
+                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill().allowsHitTesting(false) }.clipped()
+            } else {
                 ZStack {
                     LinearGradient(colors: [.indigo.opacity(0.6), .purple.opacity(0.4)], startPoint: .top, endPoint: .bottom)
                     VStack(spacing: 6) {
@@ -76,6 +108,12 @@ struct PosterImage: View {
                     .foregroundStyle(.white.opacity(0.85))
                 }
             }
+        }
+        .task(id: url) {
+            guard let url else { image = nil; return }
+            if let c = PosterCache.shared.cached(url) { image = c; return }
+            image = nil
+            if let i = await PosterCache.shared.load(url) { withAnimation(.easeOut(duration: 0.2)) { image = i } }
         }
     }
 }

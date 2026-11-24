@@ -10,16 +10,26 @@ enum EngineChooser {
     static func useNative(_ r: PlayRequest) -> Bool {
         guard AppSettings.shared.nativeEngine else { return false }
         guard r.source.kind != .smb else { return false }
+        guard !badNative.contains(r.file.id) else { return false }
         return nativeExts.contains(r.file.ext)
+    }
+    /// Files AVPlayer opened but could not draw (e.g. HEVC tagged hev1, unsupported codec): play them with VLC/MPV from now on.
+    static var badNative: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "native.bad") ?? [])
+    static func markBad(_ id: String) {
+        badNative.insert(id)
+        UserDefaults.standard.set(Array(badNative.suffix(500)), forKey: "native.bad")
     }
 }
 
 struct PlayerEntry: View {
     let request: PlayRequest
     @State private var current: PlayRequest?
+    @State private var fellBack: Set<String> = []
     var body: some View {
         let r = current ?? request
-        if EngineChooser.useNative(r) { NativePlayerView(request: r).id(r.id) }
+        if EngineChooser.useNative(r) && !fellBack.contains(r.file.id) {
+            NativePlayerView(request: r, onFallback: { EngineChooser.markBad(r.file.id); fellBack.insert(r.file.id) }).id(r.id)
+        }
         else { PlayerView(request: r, onNext: { current = $0 }).id(r.id) }
     }
 }
@@ -83,6 +93,8 @@ final class NativePlayerModel: ObservableObject {
     let request: PlayRequest
     let player = AVPlayer()
     @Published var errorText: String?
+    /// set when AVPlayer has a video track it cannot draw; the view hands the file to VLC/MPV
+    @Published var needsFallback = false
     @Published var badges: [String] = []
     @Published var showBadges = true
     private var resumeKey: String?
@@ -104,6 +116,7 @@ final class NativePlayerModel: ObservableObject {
             var opts: [String: Any] = [:]
             if !p.headers.isEmpty { opts["AVURLAssetHTTPHeaderFieldsKey"] = p.headers }
             let asset = AVURLAsset(url: p.url, options: opts)
+            if await Self.videoUndrawable(asset) { guard !stopped else { return }; stop(); needsFallback = true; return }
             let item = AVPlayerItem(asset: asset)
             item.textStyleRules = SubtitleStyle.shared.avTextStyleRules
             styleSub = SubtitleStyle.shared.objectWillChange
@@ -127,6 +140,7 @@ final class NativePlayerModel: ObservableObject {
             endObs = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
                 Task { @MainActor in if let k = self?.resumeKey { Resume.clear(k) } }
             }
+            watchPicture(item, asset)
             var b = await DolbyBadges.inspect(asset)
             if DolbyBadges.nameHintsAtmos(request.file.name), let i = b.firstIndex(of: "Dolby Digital Plus") { b[i] = "杜比全景声" }
             badges = b
@@ -135,6 +149,34 @@ final class NativePlayerModel: ObservableObject {
             showBadges = false
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+
+    /// Video track present but not decodable / not playable by AVFoundation.
+    static func videoUndrawable(_ asset: AVURLAsset) async -> Bool {
+        guard let v = try? await asset.loadTracks(withMediaType: .video).first else { return false }
+        let playable = (try? await v.load(.isPlayable)) ?? true
+        let decodable = (try? await v.load(.isDecodable)) ?? true
+        if !playable || !decodable { return true }
+        for fd in (try? await v.load(.formatDescriptions)) ?? [] {
+            let sub = CMFormatDescriptionGetMediaSubType(fd)
+            if sub == DolbyBadges.fourCC("hev1") || sub == DolbyBadges.fourCC("dvhe") { return true }
+        }
+        return false
+    }
+    /// Audio running but still no frame size after a few seconds → no picture: fall back.
+    private func watchPicture(_ item: AVPlayerItem, _ asset: AVURLAsset) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<8 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !self.stopped else { return }
+                if item.presentationSize.width > 0 { return }
+            }
+            guard let self, !self.stopped else { return }
+            let hasVideo = ((try? await asset.loadTracks(withMediaType: .video)) ?? []).isEmpty == false
+            if hasVideo, item.presentationSize.width == 0, self.player.currentTime().seconds > 0.5 {
+                self.stop(); self.needsFallback = true
+            }
         }
     }
 
@@ -203,7 +245,10 @@ struct AVPlayerVC: UIViewControllerRepresentable {
 struct NativePlayerView: View {
     @StateObject private var m: NativePlayerModel
     @Environment(\.dismiss) private var dismiss
-    init(request: PlayRequest) { _m = StateObject(wrappedValue: NativePlayerModel(request)) }
+    var onFallback: () -> Void = {}
+    init(request: PlayRequest, onFallback: @escaping () -> Void = {}) {
+        _m = StateObject(wrappedValue: NativePlayerModel(request)); self.onFallback = onFallback
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -224,7 +269,8 @@ struct NativePlayerView: View {
                     Button("关闭") { close() }.glassButton(prominent: true)
                 }.padding(24).glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous)).padding(.top, 200)
             }
-            if showClose || m.errorText != nil {
+            // AVPlayerViewController already shows its own close X in a full-screen cover; ours only on error
+            if m.errorText != nil {
                 HStack {
                     Button { close() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
                         .glass(in: Circle(), interactive: true).foregroundStyle(.white)
@@ -237,7 +283,8 @@ struct NativePlayerView: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut, value: m.showBadges)
         .task { await m.start() }
-        .onDisappear { m.stop(); OrientationLock.set(.portrait, force: .portrait) }
+        .onChange(of: m.needsFallback) { _, v in if v { onFallback() } }
+        .onDisappear { let fb = m.needsFallback; m.stop(); if !fb { OrientationLock.set(.portrait, force: .portrait) } }
     }
     private func close() { m.stop(); OrientationLock.leavePlayer { dismiss() } }
 

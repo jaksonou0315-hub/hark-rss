@@ -99,6 +99,10 @@ final class LibraryStore: ObservableObject {
         if let d = try? Data(contentsOf: fileURL), let s = try? JSONDecoder().decode(Snapshot.self, from: d) {
             folders = s.folders; items = s.items
         }
+        // a coalesced save still waiting must hit disk before iOS suspends us
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if let self, self.saveTask != nil { self.saveTask?.cancel(); self.saveNow() } }
+        }
     }
     /// Encode + write off the main thread (library.json can be several MB).
     /// Same show split across folders (e.g. one folder per season) → one item per TMDB id.
@@ -121,7 +125,18 @@ final class LibraryStore: ObservableObject {
         Groupings.invalidateCaches()
     }
 
+    /// Coalesced: encoding several MB of JSON every few seconds during enrich ran the CPU at 74% (cpu_resource report, 1.21.7).
+    private var saveTask: Task<Void, Never>?
     private func save() {
+        guard saveTask == nil else { return }
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.saveNow()
+        }
+    }
+    private func saveNow() {
+        saveTask = nil
         mergeDuplicateShows()
         let snap = Snapshot(folders: folders, items: items)
         let url = fileURL
