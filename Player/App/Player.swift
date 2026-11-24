@@ -28,6 +28,9 @@ final class PlayerController: NSObject, ObservableObject {
     let engine: MediaEngine
     private var styleSub: AnyCancellable?
     @Published var badges: [String] = []
+    @Published var mediaBadges: [String] = []   // stays; shown top-centre with the controls
+    let pipBox = SamplePiP()
+    @Published var pipActive = false
     private var didBadge = false
     let request: PlayRequest
     var videoView: UIView { engine.view }
@@ -189,7 +192,8 @@ final class PlayerController: NSObject, ObservableObject {
     static func findNext(_ r: PlayRequest) -> PlayRequest? {
         if let iid = r.itemId, let fid = r.fileId,
            let item = LibraryStore.shared.items.first(where: { $0.id == iid }), item.isTV {
-            let eps = item.files.filter { $0.episode != nil }
+            let curSeason = item.files.first(where: { $0.id == r.fileId })?.season
+            let eps = item.files.filter { $0.episode != nil && (curSeason == nil || $0.season == curSeason) }
                 .sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
             guard let i = eps.firstIndex(where: { $0.id == fid }), i + 1 < eps.count else { return nil }
             let f = eps[i + 1]
@@ -306,6 +310,7 @@ final class PlayerController: NSObject, ObservableObject {
             b.append(a)
         }
         badges = b
+        mediaBadges = b
         if b.contains("杜比视界") && engine is VLCEngine {
             toast = EngineChooser.nativeExts.contains(request.file.ext)
                 ? "杜比视界：请在设置里打开「苹果原生内核」以正确显示色彩"
@@ -407,7 +412,19 @@ final class PlayerController: NSObject, ObservableObject {
         }
     }
 
+    @MainActor func setupPiP() {
+        guard SamplePiP.supported, UserDefaults.standard.object(forKey: "av.pip") as? Bool ?? true else { return }
+        let p = pipBox
+        p.isPlaying = { [weak self] in self?.isPlaying ?? false }
+        p.setPlaying = { [weak self] on in guard let self else { return }; if on != self.isPlaying { self.toggle() } }
+        p.skipBy = { [weak self] s in self?.skip(Int32(s)) }
+        p.duration = { [weak self] in Double(self?.lengthMs ?? 0) / 1000 }
+        p.current = { [weak self] in Double(self?.timeMs ?? 0) / 1000 }
+        p.onState = { [weak self] on in self?.pipActive = on }
+        p.attach(to: videoView, auto: UserDefaults.standard.object(forKey: "av.pipAuto") as? Bool ?? true)
+    }
     func stop() {
+        pipBox.detach()
         captioner.stop()
         if let k = playable?.resumeKey, timeMs > 10_000, !ended { Resume.set(k, timeMs, total: lengthMs) }
         timer?.invalidate()
@@ -554,7 +571,7 @@ struct PlayerView: View {
                 .padding(40)
             }
             LiveCaptionOverlay(captioner: c.captioner)
-            if !c.badges.isEmpty {
+            if !c.badges.isEmpty && !showControls {
                 VStack {
                     HStack(spacing: 8) {
                         ForEach(c.badges, id: \.self) { b in
@@ -609,7 +626,7 @@ struct PlayerView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden(!showControls)
         .persistentSystemOverlays(.hidden)
-        .task { c.onNext = { r in PlayerView.switching = true; onNext(r) }; await c.start(); scheduleHide() }
+        .task { c.onNext = { r in PlayerView.switching = true; onNext(r) }; await c.start(); c.setupPiP(); scheduleHide() }
         .onAppear {
             if PlayerView.slideIn {
                 PlayerView.slideIn = false
@@ -620,6 +637,10 @@ struct PlayerView: View {
             landscape = true
             if !PlayerView.switching { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
             PlayerView.switching = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            if landscape { OrientationLock.set(followRotation ? .allButUpsideDown : .landscape, force: .landscapeRight) }
+            else { setOrientation(portrait: true) }
         }
         .onDisappear { c.stop(); if !PlayerView.switching { OrientationLock.set(.portrait, force: .portrait) } }
         .onChange(of: c.ended) { _, ended in if ended && !PlayerView.switching { close() } }
@@ -678,22 +699,33 @@ struct PlayerView: View {
                 HStack(spacing: 14) {
                     roundButton("xmark") { close() }
                     Spacer()
+                    HStack(spacing: 6) {
+                        ForEach(c.mediaBadges, id: \.self) { b in
+                            Text(b).font(.caption.weight(.bold)).padding(.horizontal, 12).padding(.vertical, 7).glass(in: Capsule())
+                        }
+                    }
+                    Spacer()
                     roundButton(curFill == 0 ? "arrow.up.left.and.arrow.down.right.rectangle" : curFill == 1 ? "rectangle.arrowtriangle.2.inward" : "arrow.left.and.right.square") {
                         curFill = (curFill + 1) % 3
                         c.engine.applyFill(curFill, screen: screenSize)
                         flash(["适应屏幕", "填充屏幕", "拉伸铺满"][curFill]); scheduleHide()
                     }
-                    roundButton("pip.enter") { flash("画中画需要苹果原生内核，VLC/MPV 暂不支持") }
+                    roundButton("pip.enter") {
+                        if SamplePiP.supported { c.pipBox.toggle() } else { flash("这台设备不支持画中画") }
+                    }
                 }
                 Spacer()
                 // middle: lock | rotate
                 HStack {
                     roundButton("lock.circle.dotted", size: 52) { locked = true; showControls = true; scheduleHide() }
                     Spacer()
+                    if screenSize.width >= screenSize.height { transport }
+                    Spacer()
                     if rotateButton {
                         roundButton("rectangle.portrait.rotate", size: 52) { landscape.toggle(); setOrientation(portrait: !landscape); scheduleHide() }
                     }
                 }
+                if screenSize.width < screenSize.height { transport.scaleEffect(0.8).padding(.top, 12) }
                 Spacer()
                 // progress
                 HStack(spacing: 12) {
@@ -715,7 +747,16 @@ struct PlayerView: View {
                         Button { trackSheet = .audio; hideTask?.cancel() } label: { Image(systemName: "waveform.circle").font(.title2).frame(width: 44, height: 44) }
                         Button { trackSheet = .more; hideTask?.cancel() } label: { Image(systemName: "gearshape").font(.title2).frame(width: 44, height: 44) }
                     }
-                    HStack(spacing: 26) {
+                }
+                .padding(.top, 6)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
+        }
+    }
+
+    private var transport: some View {
+                    HStack(spacing: 22) {
                         if nextButton, c.prevRequest != nil {
                             roundButton("backward.end.fill", size: 48) { c.playPrev() }
                         }
@@ -737,13 +778,7 @@ struct PlayerView: View {
                             roundButton("forward.end.fill", size: 48) { c.playNext() }
                         }
                     }
-                }
-                .padding(.top, 6)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 8)
-        }
-    }
+                    }
 
     private func roundButton(_ icon: String, size: CGFloat = 52, font: Font = .title3, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: icon).font(font).frame(width: size, height: size) }
