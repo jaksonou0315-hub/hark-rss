@@ -167,20 +167,55 @@ enum TMDB {
     static func search(title: String, year: Int?, tv: Bool) async -> TMDBMatch? {
         let key = TMDBCache.searchKey(title, year, tv)
         if let hit = TMDBCache.shared.match(key) { return hit }
-        var m = await searchOne(title: title, year: year, tv: tv)
-        if m == nil, year != nil { m = await searchOne(title: title, year: nil, tv: tv) }
-        if m == nil { m = await searchOne(title: title, year: year, tv: !tv) }
+        var m: TMDBMatch? = nil
+        for q in queryVariants(title) {
+            m = await searchOne(title: q, year: year, tv: tv)
+            if m == nil, year != nil { m = await searchOne(title: q, year: nil, tv: tv) }
+            if m == nil { m = await searchOne(title: q, year: year, tv: !tv) }
+            if m != nil { break }
+        }
         if let m { TMDBCache.shared.setMatch(key, m) }
         return m
+    }
+
+    /// "X医生：外科医生大门未知子-Doctor-X S01" → full, CJK part, Latin part, each side of ：/-, minus season tags.
+    static func queryVariants(_ raw: String) -> [String] {
+        func clean(_ s: String) -> String {
+            var t = s
+            for pat in [#"(?i)\bS\d{1,2}(E\d+)?\b"#, #"(?i)\bseason\s*\d+"#, #"第[一二三四五六七八九十\d]+[季部]"#, #"(?i)\b(complete|全集|国语|粤语|中字|双语|未删减|TVB)\b"#, #"[\[【(（].*?[\]】)）]"#] {
+                t = t.replacingOccurrences(of: pat, with: " ", options: .regularExpression)
+            }
+            return NameParser.cleanTitle(t.replacingOccurrences(of: "-", with: " "))
+        }
+        var out: [String] = []
+        func add(_ s: String) { let c = clean(s); if c.count >= 2, !out.contains(c) { out.append(c) } }
+        add(raw)
+        let cjk = String(raw.filter { !$0.isASCII || $0 == " " })
+        let latin = String(raw.unicodeScalars.filter { $0.isASCII }.map(Character.init))
+        if latin.filter(\.isLetter).count >= 3 { add(latin) }
+        add(cjk)
+        for sep in ["：", ":", " - ", "-", "·", "|", "/"] where raw.contains(sep) {
+            for part in raw.components(separatedBy: sep) { add(part) }
+        }
+        return Array(out.prefix(6))
     }
 
     private static func searchOne(title: String, year: Int?, tv: Bool) async -> TMDBMatch? {
         var q = ["query": title, "include_adult": "false"]
         if let year { q[tv ? "first_air_date_year" : "year"] = String(year) }
-        guard let r = request(tv ? "/search/tv" : "/search/movie", q),
-              let o = try? await HTTP.json(r),
-              let it = o.arr("results").first else { return nil }
-        return match(it, kind: tv ? "tv" : "movie")
+        guard let r = request(tv ? "/search/tv" : "/search/movie", q) else { return nil }
+        // retry rate limits / network blips instead of leaving the item in 其他
+        for attempt in 0..<4 {
+            do {
+                let o = try await HTTP.json(r)
+                return o.arr("results").first.map { match($0, kind: tv ? "tv" : "movie") }
+            } catch let e as HTTPStatusError where e.code == 429 || e.code >= 500 {
+                try? await Task.sleep(for: .seconds(min(10, Double(e.retryAfter ?? (attempt + 1) * 2))))
+            } catch {
+                try? await Task.sleep(for: .seconds(Double(attempt + 1)))
+            }
+        }
+        return nil
     }
 
     /// All results for the 编辑信息 sheet (no cache, user-driven).

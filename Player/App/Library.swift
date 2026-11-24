@@ -107,6 +107,13 @@ final class LibraryStore: ObservableObject {
     }
     /// Encode + write off the main thread (library.json can be several MB).
     /// Same show split across folders (e.g. one folder per season) → one item per TMDB id.
+    /// Items folded into another by mergeDuplicateShows (old id → surviving id), so an open detail page follows it.
+    private(set) var mergedInto: [String: String] = [:]
+    func resolve(_ id: String) -> String {
+        var cur = id, n = 0
+        while let nx = mergedInto[cur], n < 8, !items.contains(where: { $0.id == cur }) { cur = nx; n += 1 }
+        return cur
+    }
     private func mergeDuplicateShows() {
         var first: [Int: Int] = [:]
         var drop = IndexSet()
@@ -117,6 +124,7 @@ final class LibraryStore: ObservableObject {
                 let have = Set(merged[k].files.map(\.id))
                 merged[k].files += it.files.filter { !have.contains($0.id) }
                 merged[k].added = max(merged[k].added, it.added)
+                mergedInto[it.id] = merged[k].id
                 drop.insert(i)
             } else { first[t] = i }
         }

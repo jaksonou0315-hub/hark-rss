@@ -76,7 +76,7 @@ struct DetailView: View {
     @State private var openRelated: LibraryItem?
     @ObservedObject private var dl = DownloadStore.shared
 
-    private var item: LibraryItem? { library.items.first { $0.id == itemId } }
+    private var item: LibraryItem? { let id = library.resolve(itemId); return library.items.first { $0.id == id } }
 
     var body: some View {
         GeometryReader { geo in
@@ -134,7 +134,7 @@ struct DetailView: View {
         }
         .sheet(isPresented: $showEdit) { if let item { EditInfoView(item: item) } }
         .confirmationDialog("从媒体库中移除？", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("移除", role: .destructive) { library.removeItem(itemId); dismiss() }
+            Button("移除", role: .destructive) { library.removeItem(library.resolve(itemId)); dismiss() }
         } message: { Text("网盘里的文件不会被删除，可在 设置 › 媒体库 里恢复。") }
         .overlay(alignment: .bottom) { downloadBadge }
         .navigationDestination(item: $openRelated) { DetailView(itemId: $0.id) }
