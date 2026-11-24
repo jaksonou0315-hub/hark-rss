@@ -12,7 +12,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section { NavigationLink { StorageDetailView() } label: { StorageCard() }.buttonStyle(.plain) }
+                Section {
+                    StorageCard()
+                        .background(NavigationLink("") { StorageDetailView() }.opacity(0))
+                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                }
                     .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 Section {
                     HStack(spacing: 10) {
@@ -413,7 +417,7 @@ struct StorageCard: View {
     private func fmt(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("空间占用").foregroundStyle(.secondary)
                 Spacer()
@@ -431,18 +435,20 @@ struct StorageCard: View {
                 }
                 .clipShape(Capsule())
             }
-            .frame(height: 22)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), alignment: .leading)], alignment: .leading, spacing: 8) {
-                ForEach(parts) { p in
-                    HStack(spacing: 6) {
-                        Circle().fill(p.color).frame(width: 10, height: 10)
-                        Text(p.id).font(.subheadline).lineLimit(1)
+            .frame(height: 18)
+            HStack(spacing: 0) {
+                ForEach(Array(parts.enumerated()), id: \.element.id) { i, p in
+                    if i > 0 { Spacer(minLength: 6) }
+                    HStack(spacing: 4) {
+                        Circle().fill(p.color).frame(width: 8, height: 8)
+                        Text(p.id).font(.footnote).lineLimit(1).fixedSize()
                     }
-                    .help(fmt(p.bytes))
                 }
             }
+            .minimumScaleFactor(0.7)
         }
-        .padding(18)
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .contentShape(Rectangle())
         .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
         .task { await measure() }
     }
