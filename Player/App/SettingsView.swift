@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage(MetaSource.key) private var metaSource = "tmdb"
     @ObservedObject private var sourceStore = SourceStore.shared
     @State private var cd2Edit: MediaSource?
+    @AppStorage("scan.low115") private var low115 = true
 
     var body: some View {
         NavigationStack {
@@ -90,6 +91,7 @@ struct SettingsView: View {
                 Section("媒体库") {
                     LabeledContent("影片数量", value: "\(library.items.count)")
                     LabeledContent("视频文件", value: "\(library.items.reduce(0) { $0 + $1.files.count })")
+                    Toggle("115 低频扫描（降低风控）", isOn: $low115)
                     Button("完整重新扫描") { Task { await library.scan(force: true) } }
                     NavigationLink("扫描诊断") { ScanDiagnosticsView() }
                     NavigationLink("下载管理") { DownloadsView() }

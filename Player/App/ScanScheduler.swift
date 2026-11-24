@@ -342,20 +342,26 @@ final class ScanCenter: ObservableObject {
     static let shared = ScanCenter()
     @Published private(set) var stats: [UUID: GateStats] = [:]
     private var gates: [UUID: SourceGate] = [:]
+    private var gateMs: [UUID: Int] = [:]
     private var dbs: [UUID: SnapshotDB] = [:]
     private var cancelled = Set<UUID>()
 
     func gate(_ s: MediaSource) -> SourceGate {
-        if let g = gates[s.id] { return g }
+        // 115 低频扫描: 1 s between requests to avoid 115's risk control (setting scan.low115, default on).
+        let low115 = s.kind == .pan115 && (UserDefaults.standard.object(forKey: "scan.low115") as? Bool ?? true)
         let ms: Int
+        if low115 { ms = 1000 } else {
         switch s.kind {
         case .local, .smb, .emby, .jellyfin: ms = 0
         case .webdav, .cd2: ms = 150
         case .guangya: ms = 150
         default: ms = 300        // cloud drives: be gentle by default
         }
+        }
+        if let g = gates[s.id], gateMs[s.id] == ms { return g }
         let g = SourceGate(minDelayMs: ms)
         gates[s.id] = g
+        gateMs[s.id] = ms
         return g
     }
     func db(_ id: UUID) -> SnapshotDB {
