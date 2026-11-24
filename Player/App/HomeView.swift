@@ -399,7 +399,14 @@ struct HomeView: View {
     @State private var shelves = HomeShelves()
     @State private var barVisible = true
 
-    private func rebuild() { shelves = HomeShelves.build(library.items, marks: marks) }
+    @State private var lastBuild = Date.distantPast
+    /// While 数据同步中 the items change every few seconds; rebuilding every shelf that often recreated the
+    /// tiles under the finger and cancelled taps (nothing opened). During a scan rebuild at most every 15 s.
+    private func rebuild(force: Bool = false) {
+        if !force, library.scanning, Date().timeIntervalSince(lastBuild) < 15 { return }
+        lastBuild = Date()
+        shelves = HomeShelves.build(library.items, marks: marks)
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -460,9 +467,10 @@ struct HomeView: View {
             .sheet(isPresented: $showFolders) { LibraryFoldersView() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeChanged).throttle(for: .seconds(3), scheduler: RunLoop.main, latest: true)) { _ in resumeTick += 1; rebuild() }
             .onReceive(library.$items.debounce(for: .seconds(1.5), scheduler: RunLoop.main)) { _ in rebuild() }
-            .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in rebuild() }
+            .onReceive(NotificationCenter.default.publisher(for: .categoryChanged)) { _ in rebuild(force: true) }
             .onReceive(marks.objectWillChange.debounce(for: .seconds(0.3), scheduler: RunLoop.main)) { _ in rebuild() }
-            .onAppear { rebuild() }
+            .onAppear { rebuild(force: true) }
+            .onChange(of: library.scanning) { _, v in if !v { rebuild(force: true) } }
             .task { await library.enrich() }
         }
     }
