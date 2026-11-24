@@ -163,9 +163,9 @@ enum Groupings {
     }
 
     enum BLSub: String, CaseIterable {
-        case movie, tv, short, anime, variety
+        case movie, tv, short, anime, variety, micro
         var name: String {
-            switch self { case .movie: "电影"; case .tv: "电视剧"; case .short: "短剧"; case .anime: "动画"; case .variety: "综艺" }
+            switch self { case .movie: "电影"; case .tv: "电视剧"; case .short: "短剧"; case .anime: "动画"; case .variety: "综艺"; case .micro: "微电影" }
         }
     }
     private static let blSubKey = "lib.blsub"
@@ -173,6 +173,9 @@ enum Groupings {
         blDict()[id].flatMap(BLSub.init(rawValue:))
     }
     static func autoBLSub(_ i: LibraryItem) -> BLSub {
+        // 微电影: tagged in title/folder or by Douban/TMDB genre "短片".
+        let hay = i.title + (i.originalTitle ?? "") + (i.files.first?.file.path ?? "")
+        if !i.isTV, hay.contains("微电影") || (i.dbGenres ?? []).contains("短片") || (i.genres ?? []).contains("短片") { return .micro }
         switch autoCategory(i, ignoreBL: true) {
         case .shortDrama: return .short
         case .anime, .animeMovie: return .anime
