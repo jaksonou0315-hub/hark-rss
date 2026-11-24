@@ -63,6 +63,7 @@ final class PosterCache {
     static let shared = PosterCache()
     private let mem: NSCache<NSURL, UIImage> = { let c = NSCache<NSURL, UIImage>(); c.totalCostLimit = 120 << 20; return c }()
     private var inflight: [URL: Task<UIImage?, Never>] = [:]
+    func clearMemory() { mem.removeAllObjects() }
     func cached(_ u: URL) -> UIImage? { mem.object(forKey: u as NSURL) }
     func load(_ u: URL) async -> UIImage? {
         if let i = cached(u) { return i }

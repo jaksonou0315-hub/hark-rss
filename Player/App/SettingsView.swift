@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section { StorageCard() }
+                Section { NavigationLink { StorageDetailView() } label: { StorageCard() }.buttonStyle(.plain) }
                     .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 Section {
                     HStack(spacing: 10) {
@@ -408,7 +408,6 @@ struct SourceCard: View {
 struct StorageCard: View {
     struct Part: Identifiable { let id: String; let color: Color; var bytes: Int64 }
     @State private var parts: [Part] = []
-    @State private var askClear = false
 
     private var total: Int64 { parts.reduce(0) { $0 + $1.bytes } }
     private func fmt(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
@@ -442,22 +441,10 @@ struct StorageCard: View {
                     .help(fmt(p.bytes))
                 }
             }
-            Button { askClear = true } label: { Text("清理图片和临时缓存").font(.footnote) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
         }
         .padding(18)
         .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
         .task { await measure() }
-        .confirmationDialog("清理图片缓存和临时文件？下载和媒体库不受影响。", isPresented: $askClear, titleVisibility: .visible) {
-            Button("清理", role: .destructive) {
-                URLCache.shared.removeAllCachedResponses()
-                let fm = FileManager.default
-                for d in [fm.temporaryDirectory, fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]] {
-                    for u in (try? fm.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? [] { try? fm.removeItem(at: u) }
-                }
-                Task { await measure() }
-            }
-        }
     }
 
     private func measure() async {
@@ -488,5 +475,107 @@ struct StorageCard: View {
                     Part(id: "AI 模型", color: .cyan, bytes: ai), Part(id: "其他", color: .gray, bytes: other)]
         }.value
         parts = r
+    }
+}
+
+/// 存储与缓存: one row per kind of data the app really keeps (only features we have).
+/// Long-press (or tap) a row → 「要清理 X 吗？」. When a new feature adds its own cache, add its row here.
+struct StorageDetailView: View {
+    struct Row: Identifiable { let id: String; let dirs: [URL]; var bytes: Int64 = 0; var count = 0 }
+    @State private var rows: [Row] = []
+    @State private var ask: Row?
+    @State private var askAll = false
+
+    static func kinds() -> [Row] {
+        let fm = FileManager.default
+        let sup = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let tmp = fm.temporaryDirectory
+        return [
+            Row(id: "文档目录", dirs: [fm.urls(for: .documentDirectory, in: .userDomainMask)[0]]),
+            Row(id: "图片缓存", dirs: [fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]]),
+            Row(id: "视频缓存", dirs: [tmp]),
+            Row(id: "字幕缓存", dirs: [tmp.appendingPathComponent("subs")]),
+            Row(id: "数据请求缓存", dirs: [sup.appendingPathComponent("tmdb-cache.json"), sup.appendingPathComponent("scan")]),
+            Row(id: "离线下载", dirs: [sup.appendingPathComponent("Downloads")]),
+            Row(id: "AI 字幕模型", dirs: [sup.appendingPathComponent("Models")]),
+        ]
+    }
+    private static let cacheKinds: Set<String> = ["图片缓存", "视频缓存", "字幕缓存", "数据请求缓存"]
+    private func fmt(_ b: Int64) -> String { ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(rows) { r in
+                    HStack {
+                        Text(r.id)
+                        Spacer()
+                        Text(fmt(r.bytes)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { ask = r }
+                    .onLongPressGesture { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); ask = r }
+                }
+            } footer: { Text("长按或点按某一项可单独清理。") }
+            Section {
+                Button(role: .destructive) { askAll = true } label: { Text("清理全部缓存").frame(maxWidth: .infinity) }
+            } footer: { Text("清理图片、视频、字幕和数据请求缓存；文档、下载和 AI 模型不受影响。") }
+        }
+        .navigationTitle("存储与缓存").navigationBarTitleDisplayMode(.inline)
+        .task { await measure() }
+        .alert("要清理 \(ask?.id ?? "") 吗？", isPresented: Binding(get: { ask != nil }, set: { if !$0 { ask = nil } })) {
+            Button("取消", role: .cancel) { ask = nil }
+            Button("清理", role: .destructive) { if let r = ask { clear([r]) }; ask = nil }
+        } message: {
+            if ask?.id == "文档目录" { Text("会删除导入到本机文档目录的文件。") }
+            else if ask?.id == "离线下载" { Text("已下载的视频会被删除。") }
+        }
+        .alert("要清理全部缓存吗？", isPresented: $askAll) {
+            Button("取消", role: .cancel) {}
+            Button("清理", role: .destructive) { clear(rows.filter { Self.cacheKinds.contains($0.id) }) }
+        }
+    }
+
+    private func clear(_ list: [Row]) {
+        let fm = FileManager.default
+        for r in list {
+            if r.id == "图片缓存" { URLCache.shared.removeAllCachedResponses(); PosterCache.shared.clearMemory() }
+            for d in r.dirs {
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: d.path, isDirectory: &isDir) else { continue }
+                if isDir.boolValue {
+                    for u in (try? fm.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? [] { try? fm.removeItem(at: u) }
+                } else { try? fm.removeItem(at: d) }
+            }
+        }
+        Task { await measure() }
+    }
+
+    private func measure() async {
+        rows = await Task.detached(priority: .utility) { () -> [Row] in
+            let fm = FileManager.default
+            func size(_ u: URL) -> (Int64, Int) {
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { return (0, 0) }
+                if !isDir.boolValue {
+                    let v = try? u.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+                    return (Int64(v?.totalFileAllocatedSize ?? 0), 1)
+                }
+                var t: Int64 = 0, n = 0
+                guard let e = fm.enumerator(at: u, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey]) else { return (0, 0) }
+                for case let f as URL in e {
+                    let v = try? f.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey])
+                    if v?.isRegularFile == true { t += Int64(v?.totalFileAllocatedSize ?? 0); n += 1 }
+                }
+                return (t, n)
+            }
+            var out = StorageDetailView.kinds()
+            let subs = size(fm.temporaryDirectory.appendingPathComponent("subs")).0
+            for i in out.indices {
+                for d in out[i].dirs { let (b, n) = size(d); out[i].bytes += b; out[i].count += n }
+                if out[i].id == "视频缓存" { out[i].bytes = max(0, out[i].bytes - subs) }
+            }
+            return out
+        }.value
     }
 }
