@@ -123,7 +123,7 @@ struct RemoteFile: Codable, Identifiable, Hashable {
 }
 
 enum FileKinds {
-    static let video: Set<String> = ["mkv", "mp4", "m4v", "mov", "avi", "wmv", "flv", "ts", "m2ts", "mts", "tp", "trp", "webm", "rmvb", "rm", "mpg", "mpeg", "vob", "iso", "3gp", "ogv", "f4v", "divx", "asf"]
+    static let video: Set<String> = ["mkv", "mp4", "m4v", "mov", "avi", "wmv", "flv", "ts", "m2ts", "mts", "tp", "trp", "webm", "rmvb", "rm", "mpg", "mpeg", "vob", "iso", "3gp", "ogv", "f4v", "divx", "asf", "strm"]
     static let subtitle: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "idx", "sup", "smi", "lrc"]
 }
 

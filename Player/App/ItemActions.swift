@@ -49,6 +49,19 @@ final class DownloadStore: ObservableObject {
     func playable(_ provider: SourceProvider, _ file: RemoteFile) async throws -> PlayableMedia {
         let key = provider.resumeKey(file)
         if let u = localURL(key) { return PlayableMedia(url: u, title: file.name, resumeKey: key) }
+        if file.ext == "strm" {
+            // .strm (OpenList Strm driver etc.): a tiny text file holding the real stream URL.
+            // The drive is only asked for the link at play time, so scans never hit its API.
+            let d = try await provider.fetchData(file)
+            let text = String(data: d, encoding: .utf8) ?? String(decoding: d, as: UTF8.self)
+            guard let line = text.split(whereSeparator: \.isNewline).map({ $0.trimmingCharacters(in: .whitespaces) })
+                    .first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
+                  let u = URL(string: line) ?? URL(string: line.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+            else { throw AppError.message("strm 文件里没有有效链接") }
+            var p = PlayableMedia(url: u, title: file.baseName, resumeKey: key)
+            p.headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)"
+            return p
+        }
         return try await provider.playable(file)
     }
 
