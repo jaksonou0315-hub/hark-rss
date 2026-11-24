@@ -383,7 +383,13 @@ struct SourceEditor: View {
                         TextField("地址，如 https://nas.local:5006/dav", text: $source.host).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("用户名", text: $source.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("密码", text: $source.password)
-                    } header: { Text(source.extra["cd2"] == "1" ? "CloudDrive2 WebDAV" : "WebDAV") } footer: { Text(source.extra["cd2"] == "1" ? "默认端口 19798，路径 /dav，例如 http://192.168.1.10:19798/dav" : "同样适用于 Alist、群晖、坚果云等 WebDAV 服务。") }
+                    } header: { Text("WebDAV") } footer: { Text("同样适用于 Alist、群晖、坚果云等 WebDAV 服务。") }
+                case .cd2:
+                    Section {
+                        TextField("CD2 地址，如 192.168.1.10", text: $source.host).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("用户名", text: $source.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("密码", text: $source.password)
+                    } header: { Text("CloudDrive2") } footer: { Text("填运行 CD2 的电脑或 NAS 的 IP 即可，端口默认 19798。账号密码填 CD2 里开启 WebDAV 时设置的。登录后会列出 CD2 挂载的所有网盘。") }
                 case .emby, .jellyfin:
                     Section {
                         TextField("服务器地址，如 http://192.168.1.10:8096", text: $source.host).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

@@ -350,7 +350,7 @@ final class ScanCenter: ObservableObject {
         let ms: Int
         switch s.kind {
         case .local, .smb, .emby, .jellyfin: ms = 0
-        case .webdav: ms = 150
+        case .webdav, .cd2: ms = 150
         case .guangya: ms = 150
         default: ms = 300        // cloud drives: be gentle by default
         }

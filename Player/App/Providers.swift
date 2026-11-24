@@ -28,6 +28,18 @@ enum Providers {
         case .local: return LocalProvider(s)
         case .smb: return SMBProvider(s)
         case .webdav: return WebDAVProvider(s)
+        case .cd2:
+            // CloudDrive2: WebDAV at http://host:19798/dav; root lists every mounted cloud drive.
+            var c = s
+            var h = c.host.trimmed
+            if !h.lowercased().hasPrefix("http") { h = "http://" + h }
+            if var u = URLComponents(string: h) {
+                if u.port == nil { u.port = 19798 }
+                if u.path.isEmpty || u.path == "/" { u.path = "/dav" }
+                h = u.string ?? h
+            }
+            c.host = h
+            return WebDAVProvider(c)
         case .emby, .jellyfin: return EmbyProvider(s)
         case .aliyun: return AliyunProvider(s)
         case .pan115: return Pan115Provider(s)

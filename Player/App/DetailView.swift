@@ -449,7 +449,7 @@ struct DetailView: View {
             var path = f.file.meta["dirPath"] ?? ""
             if path.isEmpty {
                 let folder = library.folders.first { $0.id.uuidString == f.file.meta["folder"] }
-                if src?.kind == .local || src?.kind == .smb || src?.kind == .webdav {
+                if src?.kind == .local || src?.kind == .smb || src?.kind == .webdav || src?.kind == .cd2 {
                     path = (f.file.path as NSString).deletingLastPathComponent
                 } else if let folder { path = "/" + folder.title + "/…" }
             }

@@ -69,7 +69,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    ForEach(sourceStore.sources.filter { $0.extra["cd2"] == "1" }) { src in
+                    ForEach(sourceStore.sources.filter { $0.kind == .cd2 }) { src in
                         Button { cd2Edit = src } label: {
                             HStack {
                                 Image(systemName: "externaldrive.badge.icloud").foregroundStyle(.teal)
@@ -81,10 +81,10 @@ struct SettingsView: View {
                         }
                     }
                     Button {
-                        cd2Edit = MediaSource(kind: .webdav, name: "CloudDrive2", host: "http://", extra: ["cd2": "1"])
+                        cd2Edit = MediaSource(kind: .cd2, name: "CloudDrive2")
                     } label: { Label("登录 CloudDrive2", systemImage: "plus.circle") }
                 } header: { Text("CloudDrive2") } footer: {
-                    Text("通过 CD2 的 WebDAV 挂载网盘。地址填 http://CD2所在设备IP:19798/dav，用户名和密码为 CD2 里开启 WebDAV 时设置的账号。添加后会出现在「文件源」里。")
+                    Text("连接电脑或 NAS 上运行的 CloudDrive2，直接浏览它挂载的所有网盘。添加后也会出现在「文件源」里。")
                 }
 
                 Section("媒体库") {

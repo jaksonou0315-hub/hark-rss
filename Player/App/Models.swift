@@ -2,13 +2,14 @@ import Foundation
 import SwiftUI
 
 enum SourceKind: String, Codable, CaseIterable, Identifiable {
-    case local, smb, webdav, emby, jellyfin, aliyun, pan123, pan115, baidu, quark, guangya, onedrive, dropbox, box, pcloud, yandex
+    case local, smb, webdav, cd2, emby, jellyfin, aliyun, pan123, pan115, baidu, quark, guangya, onedrive, dropbox, box, pcloud, yandex
     var id: String { rawValue }
     var title: String {
         switch self {
         case .local: return "本机文件"
         case .smb: return "SMB 共享"
         case .webdav: return "WebDAV"
+        case .cd2: return "CloudDrive2"
         case .emby: return "Emby"
         case .jellyfin: return "Jellyfin"
         case .aliyun: return "阿里云盘"
@@ -29,6 +30,7 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .local: return "iphone"
         case .smb: return "externaldrive.connected.to.line.below"
         case .webdav: return "globe"
+        case .cd2: return "externaldrive.badge.icloud"
         case .emby: return "play.tv"
         case .jellyfin: return "sparkles.tv"
         case .aliyun: return "icloud"
@@ -49,6 +51,7 @@ enum SourceKind: String, Codable, CaseIterable, Identifiable {
         case .local: return .gray
         case .smb: return .blue
         case .webdav: return .teal
+        case .cd2: return .cyan
         case .emby: return .green
         case .jellyfin: return .purple
         case .aliyun: return .orange
@@ -88,7 +91,7 @@ struct MediaSource: Codable, Identifiable, Hashable {
 
     var isLoggedIn: Bool {
         switch kind {
-        case .local, .smb, .webdav: return true
+        case .local, .smb, .webdav, .cd2: return true
         case .pan115: return !(extra["cookie"] ?? "").isEmpty
         default: return !token.isEmpty || !refreshToken.isEmpty
         }

@@ -172,10 +172,10 @@ struct AddSourceListView: View {
         List {
             let kinds = SourceKind.allCases.filter { $0 != .local && !$0.isMediaServer }
             Section("网盘") {
-                ForEach(kinds.filter { ![.smb, .webdav].contains($0) }) { row($0) }
+                ForEach(kinds.filter { ![.smb, .webdav, .cd2].contains($0) }) { row($0) }
             }
             Section("局域网 / 协议") {
-                ForEach(kinds.filter { [.smb, .webdav].contains($0) }) { row($0) }
+                ForEach(kinds.filter { [.smb, .webdav, .cd2].contains($0) }) { row($0) }
             }
         }
         .navigationTitle("添加文件源")
