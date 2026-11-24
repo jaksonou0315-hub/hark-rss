@@ -196,7 +196,8 @@ final class NativePlayerModel: ObservableObject {
                 if item.presentationSize.width > 0 { return }
             }
             guard let self, !self.stopped else { return }
-            let hasVideo = self.remux || ((try? await asset.loadTracks(withMediaType: .video)) ?? []).isEmpty == false
+            var hasVideo = self.remux
+            if !hasVideo { hasVideo = ((try? await asset.loadTracks(withMediaType: .video)) ?? []).isEmpty == false }
             if hasVideo, item.presentationSize.width == 0, self.player.currentTime().seconds > 0.5 || item.status == .failed {
                 self.stop(); self.needsFallback = true
             }
