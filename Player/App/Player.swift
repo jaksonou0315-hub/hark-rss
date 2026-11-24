@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 import SwiftUI
 import UIKit
 import AVFoundation
@@ -52,6 +53,29 @@ final class PlayerController: NSObject, ObservableObject {
     @Published var ended = false
     @Published var loadedSubs: [(name: String, url: URL)] = []
     @Published var translating = false
+    /// 副字幕: "off" | "e:<track id>" (mpv secondary-sid) | "f:<loadedSubs index>" (our own overlay)
+    @Published var secondaryKey = "off"
+    @Published var secondaryLine = ""
+    private var secondaryCues: [SubCue] = []
+    var engineSecondary: Bool { engine is MPVEngine }
+    func setSecondary(_ key: String) {
+        secondaryKey = key; secondaryCues = []; secondaryLine = ""
+        if engineSecondary { _ = engine.selectSecondarySub(-1) }
+        if key.hasPrefix("e:"), let id = Int32(key.dropFirst(2)) { _ = engine.selectSecondarySub(id) }
+        else if key.hasPrefix("f:"), let i = Int(key.dropFirst(2)), i < loadedSubs.count {
+            let u = loadedSubs[i].url
+            Task.detached { let cues = SubCueParser.parse(url: u); await MainActor.run { self.secondaryCues = cues } }
+        }
+    }
+    func loadLocalSub(_ url: URL) {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        guard let d = try? Data(contentsOf: url), let f = try? SubtitleService.saveTemp(d, name: url.lastPathComponent) else { toast = "无法读取字幕文件"; return }
+        engine.addSubtitle(f, select: true)
+        loadedSubs.append((url.lastPathComponent, f))
+        toast = "已加载字幕：\(url.lastPathComponent)"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.subtitleTracks = self.engine.subtitleTracks; self.currentSub = self.engine.currentSub }
+    }
     let bridge = TranslationBridge()
     let captioner = LiveCaptioner()
 
@@ -137,6 +161,7 @@ final class PlayerController: NSObject, ObservableObject {
         if buf != buffering { buffering = buf }
         let nt = engine.timeMs
         if nt != timeMs { timeMs = nt }
+        if !secondaryCues.isEmpty { let l = SubCueParser.line(secondaryCues, at: nt - Int32(subDelayMs)); if l != secondaryLine { secondaryLine = l } }
         let nl = engine.lengthMs
         if nl != lengthMs { lengthMs = nl }
         if lengthMs > 0 { let p = engine.position; if p != position { position = p } }
@@ -192,11 +217,11 @@ final class PlayerController: NSObject, ObservableObject {
     static func findNext(_ r: PlayRequest) -> PlayRequest? {
         if let iid = r.itemId, let fid = r.fileId,
            let item = LibraryStore.shared.items.first(where: { $0.id == iid }), item.isTV {
-            let curSeason = item.files.first(where: { $0.id == r.fileId })?.season
-            let eps = item.files.filter { $0.episode != nil && (curSeason == nil || $0.season == curSeason) }
+            let curSeason = item.files.first(where: { $0.id == r.fileId })?.season ?? 1
+            let eps = item.files.filter { $0.episode != nil && ($0.season ?? 1) == curSeason }
                 .sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
-            guard let i = eps.firstIndex(where: { $0.id == fid }), i + 1 < eps.count else { return nil }
-            let f = eps[i + 1]
+            guard let i = eps.firstIndex(where: { $0.id == fid }),
+                  let f = eps[(i + 1)...].first(where: { $0.episode != eps[i].episode }) else { return nil }
             guard let src = SourceStore.shared.source(f.sourceId) else { return nil }
             return PlayRequest(source: src, file: f.file, siblings: [], title: "\(item.title) 第\(f.episode ?? 0)集",
                                extraSubtitles: f.subtitles, itemId: iid, fileId: f.id)
@@ -212,7 +237,12 @@ final class PlayerController: NSObject, ObservableObject {
     lazy var episodes: [EpisodeEntry] = {
         let r = request
         if let iid = r.itemId, let item = LibraryStore.shared.items.first(where: { $0.id == iid }), item.isTV {
-            let eps = item.files.filter { $0.episode != nil }
+            let curSeason = item.files.first(where: { $0.id == r.fileId })?.season ?? 1
+            var seen = Set<Int>()
+            let mine = item.files.filter { $0.episode != nil && ($0.season ?? 1) == curSeason }
+            // one tile per episode number (other versions of the same episode are dropped; the playing one wins)
+            let eps = (mine.filter { $0.id == r.fileId } + mine.filter { $0.id != r.fileId })
+                .filter { seen.insert($0.episode ?? 0).inserted }
                 .sorted { ($0.season ?? 0, $0.episode ?? 0, $0.file.name) < ($1.season ?? 0, $1.episode ?? 0, $1.file.name) }
             return eps.compactMap { f in
                 guard let src = SourceStore.shared.source(f.sourceId) else { return nil }
@@ -592,7 +622,7 @@ struct PlayerView: View {
                     }
                     .transition(.opacity)
                 }
-            } else if showControls && trackSheet == nil && !showList { controls.transition(.opacity) }
+            } else if (showControls || trackSheet != nil) && !showList { controls.transition(.opacity) }
             if showList { playlistOverlay }
             if let sk = c.activeSkip, !locked, trackSheet == nil {
                 VStack {
@@ -608,6 +638,15 @@ struct PlayerView: View {
                     .padding(.trailing, 28).padding(.bottom, showControls ? 96 : 40)
                 }
                 .transition(.opacity)
+            }
+            if !c.secondaryLine.isEmpty {
+                VStack {
+                    Text(c.secondaryLine).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center).shadow(color: .black.opacity(0.9), radius: 2)
+                        .padding(.horizontal, 60).padding(.top, showControls ? 70 : 16)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
             }
             if let k = trackSheet { trackPanel(k) }
             if let t = c.toast {
@@ -673,14 +712,13 @@ struct PlayerView: View {
                                    openOnline: { closePanel(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showOnline = true } })
                     }
                 }
-                    .frame(width: land ? min(max(g.size.width * 0.3, 320), 400) : g.size.width - 16,
-                           height: land ? min(g.size.height * 0.68, k == .more ? 330 : 420) : max(g.size.height * 0.38, 300))
-                    .padding(.bottom, land ? 70 : 0).padding(.trailing, land ? 12 : 0)
+                    .frame(width: land ? 290 : min(g.size.width - 32, 340),
+                           height: land ? min(g.size.height * 0.62, k == .more ? 250 : (k == .audio ? 200 : 330)) : min(g.size.height * 0.45, 380))
                     .background(.ultraThinMaterial.opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .padding(8)
-                    .transition(.move(edge: land ? .trailing : .bottom).combined(with: .opacity))
+                    .padding(.trailing, land ? 20 : 0).padding(.bottom, land ? 72 : 90)
+                    .transition(.scale(scale: 0.9, anchor: .bottomTrailing).combined(with: .opacity))
             }
         }
         .ignoresSafeArea(edges: .vertical)
@@ -831,7 +869,7 @@ struct PlayerView: View {
     /// 更多设置 panel (gear button).
     private var morePanel: some View {
         VStack(spacing: 0) {
-            Text("更多设置").font(.headline).padding(.vertical, 14)
+            Text("更多设置").font(.headline).padding(.vertical, 10)
             Divider().overlay(.white.opacity(0.15))
             ScrollView {
                 VStack(spacing: 0) {
@@ -843,7 +881,6 @@ struct PlayerView: View {
                     moreRow("backward.end", "上一集 / 下一集按钮") { Toggle("", isOn: $nextButton).labelsHidden() }
                     moreRow("arrow.clockwise", "快退 / 快进按钮") { Toggle("", isOn: $seekButtons).labelsHidden() }
                     Button { closePanel(); snapshot() } label: { moreRow("camera", "截图") { EmptyView() } }
-                    Button { closePanel(); showOnline = true } label: { moreRow("magnifyingglass", "搜索字幕") { EmptyView() } }
                 }
             }
         }
@@ -856,7 +893,7 @@ struct PlayerView: View {
             Spacer()
             trailing()
         }
-        .font(.body).padding(.horizontal, 18).frame(minHeight: 54).contentShape(Rectangle())
+        .font(.subheadline).padding(.horizontal, 16).frame(minHeight: 42).contentShape(Rectangle())
     }
 
     private var subtitleMenu: some View {
@@ -1051,69 +1088,24 @@ struct TrackSheet: View {
     let close: () -> Void
     let openOnline: () -> Void
     @State private var showAISettings = false
+    @State private var showSettings = false
+    @State private var secondary = false
+    @State private var embeddedOpen = true
+    @State private var importing = false
 
     var body: some View {
         NavigationStack {
-            List {
-                if kind == .subtitle {
-                    Section("字幕轨道") {
-                        ForEach(c.subtitleTracks, id: \.id) { t in
-                            row(t.name, selected: t.id == c.currentSub) { c.selectSub(t.id) }
-                        }
-                    }
-                    Section("字幕延迟（当前 \(String(format: "%.1f", Double(c.subDelayMs) / 1000)) 秒）") {
-                        HStack {
-                            Button("提前 0.5 秒") { c.shiftSubDelay(-500) }.buttonStyle(.bordered)
-                            Spacer()
-                            Button("延后 0.5 秒") { c.shiftSubDelay(500) }.buttonStyle(.bordered)
-                        }
-                    }
-                    if UserDefaults.standard.object(forKey: "ai.enabled") as? Bool ?? true {
-                    Section("AI 与翻译") {
-                        Button { Task { await c.toggleAICaptions() } } label: {
-                            Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
-                        }
-                        ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
-                            if UserDefaults.standard.object(forKey: "aitr.enabled") as? Bool ?? true {
-                                Button { Task { await c.aiTranslateSub(s.url, name: s.name) } } label: {
-                                    Label("AI 翻译：\(s.name)", systemImage: "sparkles").lineLimit(1)
-                                }.disabled(c.translating)
-                            }
-                            Button { Task { await c.translateSub(s.url, name: s.name) } } label: {
-                                Label("系统翻译：\(s.name)", systemImage: "translate").lineLimit(1)
-                            }.disabled(c.translating)
-                        }
-                        if c.loadedSubs.isEmpty {
-                            Text("内封字幕暂不能翻译。可先「在线搜索字幕」下载外挂字幕，再用 AI 翻译。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        Button { showAISettings = true } label: {
-                            Label("AI 翻译设置（\(AITranslateConfig.shared.provider.title)）", systemImage: "key")
-                        }
-                    }
-                    }
-                    SubtitleStyleEditor()
-                    Section {
-                        Button { openOnline() } label: { Label("在线搜索字幕…", systemImage: "magnifyingglass") }
-                    }
-                } else {
-                    Section("音轨") {
-                        ForEach(c.audioTracks, id: \.id) { t in
-                            row(t.name, selected: t.id == c.currentAudio) { c.selectAudio(t.id) }
-                        }
-                    }
+            ScrollView {
+                VStack(spacing: 0) {
+                    if kind == .subtitle { subtitleRoot } else { audioRoot }
                 }
+                .padding(.horizontal, 10).padding(.bottom, 10)
             }
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 38)
+            .scrollIndicators(.hidden)
             .containerBackground(.clear, for: .navigation)
             .navigationTitle(kind == .subtitle ? "字幕" : "音频")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { close() } label: { Image(systemName: "xmark") }
-                }
-            }
+            .navigationDestination(isPresented: $showSettings) { settingsList }
             .navigationDestination(isPresented: $showAISettings) {
                 Form { AITranslateSettings() }
                     .scrollContentBackground(.hidden)
@@ -1122,6 +1114,160 @@ struct TrackSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+        .tint(.green)
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: false) { r in
+            if case .success(let us) = r, let u = us.first { c.loadLocalSub(u) }
+        }
+    }
+
+    // MARK: 字幕
+    private var embedded: [TrackInfo] { c.subtitleTracks.filter { $0.id >= 0 && $0.name != "关闭" && $0.name != "Disable" } }
+    @ViewBuilder private var subtitleRoot: some View {
+        HStack(spacing: 4) {
+            seg("主", !secondary) { secondary = false }
+            seg("副", secondary) { secondary = true }
+        }
+        .padding(3).background(.white.opacity(0.1), in: Capsule())
+        .padding(.top, 4).padding(.bottom, secondary ? 4 : 8)
+        if secondary {
+            Text("顶部显示 · 仅文本字幕").font(.caption2).foregroundStyle(.white.opacity(0.5)).padding(.bottom, 6)
+            line("关闭", selected: c.secondaryKey == "off") { c.setSecondary("off") }
+            if c.engineSecondary, !embedded.isEmpty {
+                group("内封字幕 (\(embedded.count))") {
+                    ForEach(embedded, id: \.id) { t in
+                        line(t.name, selected: c.secondaryKey == "e:\(t.id)", indent: true) { c.setSecondary("e:\(t.id)") }
+                    }
+                }
+            }
+            ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { i, s in
+                line(s.name, selected: c.secondaryKey == "f:\(i)") { c.setSecondary("f:\(i)") }
+            }
+        } else {
+            line("关闭", selected: c.currentSub < 0) { c.selectSub(-1) }
+            if !embedded.isEmpty {
+                group("内封字幕 (\(embedded.count))") {
+                    ForEach(embedded, id: \.id) { t in
+                        line(t.name, selected: t.id == c.currentSub, indent: true) { c.selectSub(t.id) }
+                    }
+                }
+            }
+        }
+        Divider().overlay(.white.opacity(0.12)).padding(.vertical, 4)
+        action("magnifyingglass", "搜索字幕") { openOnline() }
+        action("doc.badge.plus", "加载本地字幕") { importing = true }
+        if !secondary { action("slider.horizontal.3", "字幕设置", chevron: true) { showSettings = true } }
+    }
+
+    // MARK: 音频
+    @ViewBuilder private var audioRoot: some View {
+        ForEach(c.audioTracks, id: \.id) { t in
+            Button { c.selectAudio(t.id) } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).opacity(t.id == c.currentAudio ? 1 : 0).frame(width: 16)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(t.name).font(.subheadline).multilineTextAlignment(.leading)
+                        if let tag = Self.channelTag(t.name) {
+                            Text(tag).font(.caption2.weight(.semibold)).foregroundStyle(.green)
+                                .padding(.horizontal, 6).padding(.vertical, 2).background(.green.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 9).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        if c.audioTracks.isEmpty { Text("没有可选音轨").font(.footnote).foregroundStyle(.white.opacity(0.5)).padding(.vertical, 14) }
+    }
+    static func channelTag(_ n: String) -> String? {
+        let s = n.lowercased()
+        if s.contains("7.1") { return "7.1 声道" }
+        if s.contains("5.1") || s.contains("6 ch") || s.contains("6ch") { return "5.1 声道" }
+        if s.contains("atmos") { return "全景声" }
+        if s.contains("stereo") || s.contains("立体声") || s.contains("2.0") || s.contains("aac") { return "立体声" }
+        if s.contains("mono") || s.contains("单声道") { return "单声道" }
+        return nil
+    }
+
+    // MARK: rows
+    private func seg(_ t: String, _ on: Bool, _ a: @escaping () -> Void) -> some View {
+        Button(action: a) {
+            Text(t).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 30)
+                .background(on ? Color.white.opacity(0.28) : .clear, in: Capsule())
+        }.buttonStyle(.plain)
+    }
+    private func line(_ name: String, selected: Bool, indent: Bool = false, _ a: @escaping () -> Void) -> some View {
+        Button(action: a) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(selected ? 1 : 0).frame(width: 16)
+                Text(name).font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, indent ? 14 : 8).padding(.trailing, 8).frame(minHeight: 38).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+    private func group<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
+        VStack(spacing: 0) {
+            Button { withAnimation(.easeInOut(duration: 0.2)) { embeddedOpen.toggle() } } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "rectangle.stack").font(.footnote)
+                    Text(title).font(.footnote)
+                    Spacer()
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).rotationEffect(.degrees(embeddedOpen ? 0 : -90))
+                }
+                .foregroundStyle(.white.opacity(0.7)).padding(.horizontal, 8).frame(height: 34).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if embeddedOpen { content() }
+        }
+    }
+    private func action(_ icon: String, _ title: String, chevron: Bool = false, _ a: @escaping () -> Void) -> some View {
+        Button(action: a) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.subheadline).frame(width: 18)
+                Text(title).font(.subheadline)
+                Spacer()
+                if chevron { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.5)) }
+            }
+            .padding(.horizontal, 8).frame(height: 40).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+
+    // MARK: 字幕设置 (delay, AI, style)
+    private var settingsList: some View {
+        List {
+            Section("字幕延迟（当前 \(String(format: "%.1f", Double(c.subDelayMs) / 1000)) 秒）") {
+                HStack {
+                    Button("提前 0.5 秒") { c.shiftSubDelay(-500) }.buttonStyle(.bordered)
+                    Spacer()
+                    Button("延后 0.5 秒") { c.shiftSubDelay(500) }.buttonStyle(.bordered)
+                }
+            }
+            if UserDefaults.standard.object(forKey: "ai.enabled") as? Bool ?? true {
+                Section("AI 与翻译") {
+                    Button { Task { await c.toggleAICaptions() } } label: {
+                        Label(c.captioner.running ? "关闭 AI 实时字幕" : "AI 实时字幕", systemImage: "waveform.badge.mic")
+                    }
+                    ForEach(Array(c.loadedSubs.enumerated()), id: \.offset) { _, s in
+                        if UserDefaults.standard.object(forKey: "aitr.enabled") as? Bool ?? true {
+                            Button { Task { await c.aiTranslateSub(s.url, name: s.name) } } label: {
+                                Label("AI 翻译：\(s.name)", systemImage: "sparkles").lineLimit(1)
+                            }.disabled(c.translating)
+                        }
+                        Button { Task { await c.translateSub(s.url, name: s.name) } } label: {
+                            Label("系统翻译：\(s.name)", systemImage: "translate").lineLimit(1)
+                        }.disabled(c.translating)
+                    }
+                    Button { showAISettings = true } label: {
+                        Label("AI 翻译设置（\(AITranslateConfig.shared.provider.title)）", systemImage: "key")
+                    }
+                }
+            }
+            SubtitleStyleEditor()
+        }
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 38)
+        .containerBackground(.clear, for: .navigation)
+        .navigationTitle("字幕设置").navigationBarTitleDisplayMode(.inline)
     }
 
     private func row(_ name: String, selected: Bool, action: @escaping () -> Void) -> some View {

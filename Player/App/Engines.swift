@@ -36,7 +36,10 @@ protocol MediaEngine: AnyObject {
     /// true when the stream itself reports Dolby Vision (mpv only)
     var reportsDolbyVision: Bool { get }
     func stop()
+    /// 副字幕 from an embedded text track; false when the engine can't (VLC).
+    func selectSecondarySub(_ id: Int32) -> Bool
 }
+extension MediaEngine { func selectSecondarySub(_ id: Int32) -> Bool { false } }
 
 enum EngineKind: String, CaseIterable { case auto, mpv, vlc
     var label: String {
@@ -481,6 +484,7 @@ final class MPVEngine: MediaEngine {
     var currentAudio: Int32 { Int32(core.int("aid") ?? -1) }
     func selectSub(_ id: Int32) { core.set("sid", id < 0 ? "no" : String(id)) }
     func selectAudio(_ id: Int32) { core.set("aid", id < 0 ? "no" : String(id)) }
+    func selectSecondarySub(_ id: Int32) -> Bool { core.set("secondary-sid", id < 0 ? "no" : String(id)); return true }
     func setRate(_ r: Float) { core.set("speed", String(format: "%.2f", r)) }
     func setSubDelay(ms: Int) { core.set("sub-delay", String(format: "%.3f", Double(ms) / 1000)) }
     func addSubtitle(_ url: URL, select: Bool) {

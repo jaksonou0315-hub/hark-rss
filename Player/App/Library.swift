@@ -118,8 +118,10 @@ final class LibraryStore: ObservableObject {
         var first: [Int: Int] = [:]
         var drop = IndexSet()
         var merged = items
-        for (i, it) in merged.enumerated() where it.isTV {
-            guard let t = it.tmdbId else { continue }
+        // same TMDB id = same show / film, whatever the file names say (films get more versions)
+        for (i, it) in merged.enumerated() {
+            guard let t0 = it.tmdbId else { continue }
+            let t = it.isTV ? t0 : -t0
             if let k = first[t] {
                 let have = Set(merged[k].files.map(\.id))
                 merged[k].files += it.files.filter { !have.contains($0.id) }
@@ -445,6 +447,26 @@ final class LibraryStore: ObservableObject {
         precachePosters(items)
     }
 
+    nonisolated private static func isMixed(_ name: String) -> Bool {
+        let base = (name as NSString).deletingPathExtension
+        let head = base.components(separatedBy: CharacterSet(charactersIn: "([【")).first ?? base
+        return head.contains { !$0.isASCII && $0.isLetter } && head.range(of: "[A-Za-z]{3,}", options: .regularExpression) != nil
+    }
+    /// Nearest parent that names the show/film itself (Season folders skipped). Category folders ("大陆剧", "电影") don't count.
+    nonisolated private static func showFolder(_ parents: [String], episode: Bool, mixedName: Bool) -> String? {
+        var skippedSeason = false
+        for p in parents {
+            let n = p.trimmingCharacters(in: .whitespaces)
+            if n.range(of: #"^(season\s*\d+|s\d{1,2}|第.{1,3}季|specials?|sp|extras?|特典|花絮)$"#, options: [.regularExpression, .caseInsensitive]) != nil { skippedSeason = true; continue }
+            if TMDB.idInPath(n) != nil { return n }
+            guard mixedName else { return nil }
+            if n.range(of: #"(19|20)\d{2}"#, options: .regularExpression) != nil { return n }
+            if episode && skippedSeason && n.contains(where: { !$0.isASCII }) { return n }
+            return nil
+        }
+        return nil
+    }
+
     /// Group found videos into library items, keeping whatever metadata `current` already has.
     nonisolated private static func buildItems(_ found: [ScanFound], current: [LibraryItem]) -> ([LibraryItem], Int) {
         // group
@@ -464,6 +486,11 @@ final class LibraryStore: ObservableObject {
                 p.season = nil; p.episode = nil
             } else {
                 p = NameParser.parse(f.file.name, parents: f.parents)
+                // the show's / film's own folder ("醉梦 (2026) [tmdbid-279923]") beats a mixed 中英 file name
+                if let sf = showFolder(f.parents, episode: p.isEpisode, mixedName: isMixed(f.file.name)) {
+                    let fp = NameParser.parse(sf + ".x")
+                    if !fp.title.isEmpty { p.title = fp.title; if let y = fp.year { p.year = y } }
+                }
             }
             let key = (p.isEpisode ? "tv:" : "movie:") + p.title.lowercased() + (p.isEpisode ? "" : ":\(p.year ?? 0)")
             var ff = f.file
