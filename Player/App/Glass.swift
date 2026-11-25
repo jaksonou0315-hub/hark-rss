@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 extension View {
     /// Liquid Glass on iOS 26, frosted material on older systems.
@@ -64,6 +65,14 @@ final class PosterCache {
     private let mem: NSCache<NSURL, UIImage> = { let c = NSCache<NSURL, UIImage>(); c.totalCostLimit = 120 << 20; return c }()
     private var inflight: [URL: Task<UIImage?, Never>] = [:]
     func clearMemory() { mem.removeAllObjects() }
+    /// Decode straight to display size (ImageIO thumbnail) instead of full decode + preparingForDisplay.
+    nonisolated static func downsample(_ d: Data, maxPixel: Int) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(d as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return UIImage(data: d) }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixel]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return UIImage(data: d) }
+        return UIImage(cgImage: cg)
+    }
     func cached(_ u: URL) -> UIImage? { mem.object(forKey: u as NSURL) }
     func load(_ u: URL) async -> UIImage? {
         if let i = cached(u) { return i }
@@ -74,8 +83,8 @@ final class PosterCache {
                 r.setValue("image/*", forHTTPHeaderField: "Accept")
                 if let (d, resp) = try? await URLSession.shared.data(for: r),
                    (resp as? HTTPURLResponse).map({ $0.statusCode < 400 }) ?? true,
-                   let img = UIImage(data: d) {
-                    return img.preparingForDisplay() ?? img
+                   let img = PosterCache.downsample(d, maxPixel: u.absoluteString.contains("/w1280") ? 1400 : 560) {
+                    return img
                 }
                 try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 800_000_000)
             }

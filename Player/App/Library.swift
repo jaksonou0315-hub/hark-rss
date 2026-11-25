@@ -214,10 +214,11 @@ final class LibraryStore: ObservableObject {
 
     private func precachePosters(_ list: [LibraryItem]) {
         let off = Set(SourceStore.shared.sources.filter { $0.extra["posterCache"] == "0" }.map(\.id))
-        let urls = list.filter { !$0.files.allSatisfy { off.contains($0.sourceId) } }.flatMap { [$0.poster, $0.backdrop] }.compactMap { $0 }
+        let urls = list.filter { !$0.files.allSatisfy { off.contains($0.sourceId) } }.compactMap(\.poster)   // backdrops load on demand (w1280 for every film was heavy)
         guard !urls.isEmpty else { return }
         Task.detached(priority: .background) {
-            for chunk in stride(from: 0, to: urls.count, by: 6).map({ Array(urls[$0..<min($0 + 6, urls.count)]) }) {
+            for chunk in stride(from: 0, to: urls.count, by: 3).map({ Array(urls[$0..<min($0 + 3, urls.count)]) }) {
+                await Thermal.breathe()
                 await withTaskGroup(of: Void.self) { g in
                     for u in chunk {
                         g.addTask {
@@ -267,7 +268,8 @@ final class LibraryStore: ObservableObject {
         var idx = 0
         while idx < todo.count {
             await AppActivity.shared.waitUntilActive()
-            let chunk = Array(todo[idx..<min(idx + 8, todo.count)])
+            await Thermal.breathe()
+            let chunk = Array(todo[idx..<min(idx + 4, todo.count)])
             idx += chunk.count
             let got = await withTaskGroup(of: (String, TMDBDetails?).self) { g -> [(String, TMDBDetails?)] in
                 for it in chunk {
@@ -280,7 +282,7 @@ final class LibraryStore: ObservableObject {
             }
             for (k, d) in got { if let d { pending[k] = d; changed += 1 } }
             enrichLeft = todo.count - idx
-            if pending.count >= 80 || Date().timeIntervalSince(lastFlush) > 4 { flush(); save() }
+            if pending.count >= 150 || Date().timeIntervalSince(lastFlush) > 10 { flush(); save() }
         }
         flush()
         if changed > 0 { save() }
@@ -761,7 +763,34 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Match posters for anything not matched yet; keeps waiting for new items while the crawl runs.
+    private var metaBuf: [String: LibraryItem] = [:]
+    private var metaFlushAt = Date()
+    private func flushMeta() {
+        metaFlushAt = Date()
+        if !metaBuf.isEmpty {
+            var xs = items
+            for j in xs.indices {
+                guard let item = metaBuf[xs[j].id] else { continue }
+                // merge metadata only: the file list may have grown while we waited on TMDB
+                var cur = xs[j]
+                cur.title = item.title; cur.originalTitle = item.originalTitle; cur.year = item.year; cur.overview = item.overview
+                cur.poster = item.poster; cur.backdrop = item.backdrop; cur.rating = item.rating; cur.tmdbId = item.tmdbId
+                cur.genres = item.genres; cur.kind = item.kind
+                for i in cur.files.indices {
+                    if let f = item.files.first(where: { $0.id == cur.files[i].id }), f.episodeTitle != nil {
+                        cur.files[i].episodeTitle = f.episodeTitle; cur.files[i].still = f.still
+                    }
+                }
+                xs[j] = cur
+            }
+            metaBuf = [:]
+            items = xs
+            save()
+        }
+        refreshCounts()
+    }
     private func matchLoop() async {
+        defer { flushMeta() }
         var done = 0
         while true {
             if Task.isCancelled { return }
@@ -821,22 +850,26 @@ final class LibraryStore: ObservableObject {
                 }
                 staged[id] = st
                 reveal(id)
-            } else if let j = items.firstIndex(where: { $0.id == id }) {
-                // merge metadata only: the file list may have grown while we waited on TMDB
-                var cur = items[j]
-                cur.title = item.title; cur.originalTitle = item.originalTitle; cur.year = item.year; cur.overview = item.overview
-                cur.poster = item.poster; cur.backdrop = item.backdrop; cur.rating = item.rating; cur.tmdbId = item.tmdbId
-                cur.genres = item.genres; cur.kind = item.kind
-                for i in cur.files.indices {
-                    if let f = item.files.first(where: { $0.id == cur.files[i].id }), f.episodeTitle != nil {
-                        cur.files[i].episodeTitle = f.episodeTitle; cur.files[i].still = f.still
-                    }
-                }
-                items[j] = cur
+            } else {
+                // buffered: one publish every few seconds instead of one per film (each publish redrew Home → phone ran hot)
+                metaBuf[id] = item
             }
-            refreshCounts()
-            if done % 10 == 0 { save() }
+            if Date().timeIntervalSince(metaFlushAt) > 4 { flushMeta() }
+            await Thermal.breathe()
         }
         save()
+    }
+}
+
+
+/// Backs off background metadata work when the phone warms up.
+enum Thermal {
+    static func breathe() async {
+        switch ProcessInfo.processInfo.thermalState {
+        case .critical: try? await Task.sleep(nanoseconds: 4_000_000_000)
+        case .serious: try? await Task.sleep(nanoseconds: 1_500_000_000)
+        case .fair: try? await Task.sleep(nanoseconds: 150_000_000)
+        default: break
+        }
     }
 }
