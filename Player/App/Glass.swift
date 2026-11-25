@@ -65,6 +65,14 @@ final class PosterCache {
     private let mem: NSCache<NSURL, UIImage> = { let c = NSCache<NSURL, UIImage>(); c.totalCostLimit = 120 << 20; return c }()
     private var inflight: [URL: Task<UIImage?, Never>] = [:]
     func clearMemory() { mem.removeAllObjects() }
+    /// Own session so on-screen posters don't queue behind background precache / TMDB API calls on URLSession.shared.
+    nonisolated static let session: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.urlCache = URLCache.shared
+        c.httpMaximumConnectionsPerHost = 8
+        c.timeoutIntervalForRequest = 30
+        return URLSession(configuration: c)
+    }()
     /// Decode straight to display size (ImageIO thumbnail) instead of full decode + preparingForDisplay.
     nonisolated static func downsample(_ d: Data, maxPixel: Int) -> UIImage? {
         guard let src = CGImageSourceCreateWithData(d as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return UIImage(data: d) }
@@ -81,7 +89,7 @@ final class PosterCache {
             for attempt in 0..<3 {
                 var r = URLRequest(url: u, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
                 r.setValue("image/*", forHTTPHeaderField: "Accept")
-                if let (d, resp) = try? await URLSession.shared.data(for: r),
+                if let (d, resp) = try? await PosterCache.session.data(for: r),
                    (resp as? HTTPURLResponse).map({ $0.statusCode < 400 }) ?? true,
                    let img = PosterCache.downsample(d, maxPixel: u.absoluteString.contains("/w1280") ? 1400 : 560) {
                     return img
@@ -123,7 +131,12 @@ struct PosterImage: View {
             guard let url else { image = nil; return }
             if let c = PosterCache.shared.cached(url) { image = c; return }
             image = nil
-            if let i = await PosterCache.shared.load(url) { withAnimation(.easeOut(duration: 0.2)) { image = i } }
+            // a failed load (busy network while matching) retries while the tile stays on screen
+            for wait in [0, 3, 8, 20, 45] as [UInt64] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
+                if Task.isCancelled { return }
+                if let i = await PosterCache.shared.load(url) { withAnimation(.easeOut(duration: 0.2)) { image = i }; return }
+            }
         }
     }
 }
